@@ -23,6 +23,37 @@ public enum AppSettings {
         return value > 0 ? value : defaultRefreshInterval
     }
 
+    // MARK: Web panel
+
+    public static var panelEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: panelEnabledKey) }
+        set {
+            UserDefaults.standard.set(newValue, forKey: panelEnabledKey)
+            NotificationCenter.default.post(name: .macerodactylPanelSettingsChanged, object: nil)
+        }
+    }
+
+    public static var panelPort: Int {
+        get {
+            let value = UserDefaults.standard.integer(forKey: panelPortKey)
+            return value > 0 ? value : defaultPanelPort
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: panelPortKey)
+            NotificationCenter.default.post(name: .macerodactylPanelSettingsChanged, object: nil)
+        }
+    }
+
+    /// Whether the panel binds to the LAN (0.0.0.0) instead of localhost only.
+    /// An explicit, warned opt-in.
+    public static var panelBindLAN: Bool {
+        get { UserDefaults.standard.bool(forKey: panelBindLANKey) }
+        set {
+            UserDefaults.standard.set(newValue, forKey: panelBindLANKey)
+            NotificationCenter.default.post(name: .macerodactylPanelSettingsChanged, object: nil)
+        }
+    }
+
     /// Root under which stack folders (compose file + bind-mounted data) live.
     /// Defaults to ~/stacks; user-overridable, tilde-expanded.
     public static var stacksRoot: URL {
@@ -69,6 +100,8 @@ public enum AppSettings {
 public extension Notification.Name {
     /// Posted when a setting changes so live views re-read without a restart.
     static let macerodactylSettingsChanged = Notification.Name("macerodactylSettingsChanged")
+    /// Posted when a web-panel setting changes so the server restarts/rebinds.
+    static let macerodactylPanelSettingsChanged = Notification.Name("macerodactylPanelSettingsChanged")
 }
 
 public enum AppPaths {
