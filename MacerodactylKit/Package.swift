@@ -36,7 +36,10 @@ let package = Package(
                 .product(name: "HummingbirdBcrypt", package: "hummingbird-auth"),
                 .product(name: "HummingbirdTLS", package: "hummingbird"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
-            ]
+            ],
+            // The web frontend: static HTML/CSS/JS served from the bundle (built
+            // with safe DOM APIs, so a missed escape can't be a latent XSS).
+            resources: [.copy("Resources/panel")]
         ),
         .target(
             name: "MacerodactylUI",

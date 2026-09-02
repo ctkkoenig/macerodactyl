@@ -43,6 +43,13 @@ struct PanelRoutes {
         router.post("logout", use: logout)
         router.get("me", use: appPage)
 
+        // Static frontend assets (no secrets — this is the client code). Served
+        // from a fixed allow-list, never a filename from the URL.
+        router.get("assets/panel.css", use: { _, _ in Self.asset(.panelCSS) })
+        router.get("assets/panel.js", use: { _, _ in Self.asset(.panelJS) })
+        router.get("assets/login.css", use: { _, _ in Self.asset(.loginCSS) })
+        router.get("assets/login.js", use: { _, _ in Self.asset(.loginJS) })
+
         let api = router.group("api").add(middleware: RequireAuth())
         api.get("me", use: apiMe)
         api.get("stats", use: apiStatsSnapshot)
@@ -90,12 +97,24 @@ struct PanelRoutes {
 
     @Sendable func loginPage(_ request: Request, context: PanelRequestContext) async throws -> Response {
         if context.identity != nil { return redirect("/me") }
-        return html(PanelHTML.login())
+        return html(PanelAssets.string(.loginHTML))
     }
 
     @Sendable func appPage(_ request: Request, context: PanelRequestContext) async throws -> Response {
         guard context.identity != nil else { return redirect("/login") }
-        return html(PanelHTML.app())
+        return html(PanelAssets.string(.appHTML))
+    }
+
+    /// Serves a static frontend asset with its content type. `no-cache` (i.e.
+    /// revalidate every load) is deliberate: the asset filenames are NOT
+    /// content-hashed (no build step), so a long cache would leave browsers on a
+    /// stale panel for up to that lifetime after the app is updated. The files
+    /// are tiny, so revalidation is cheap.
+    static func asset(_ asset: PanelAssets.Asset) -> Response {
+        Response(
+            status: .ok,
+            headers: [.contentType: asset.contentType, .cacheControl: "no-cache"],
+            body: .init(byteBuffer: ByteBuffer(string: PanelAssets.string(asset))))
     }
 
     struct HealthResponse: Encodable {
