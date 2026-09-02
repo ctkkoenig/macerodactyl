@@ -8,6 +8,8 @@ struct PanelRoutes {
     let store: PanelDataStore
     let rateLimiter: LoginRateLimiter
     let containers: ContainerService
+    /// Mark session cookies `Secure` (set when the server is serving HTTPS).
+    var secureCookies: Bool = false
 
     func register(on router: Router<PanelRequestContext>) {
         router.get("/", use: root)
@@ -544,14 +546,16 @@ struct PanelRoutes {
             name: PanelSession.cookieName, value: token,
             maxAge: PanelSession.lifetimeDays * 86_400,
             path: "/",
-            secure: false,  // plain HTTP hop behind the tunnel
+            secure: secureCookies,  // Secure when serving HTTPS; plain when behind a tunnel
             httpOnly: true,  // not visible to page scripts
             sameSite: .lax  // Lax, not Strict: survives the top-level return from Cloudflare Access
         )
     }
 
     private func expiredCookie() -> Cookie {
-        Cookie(name: PanelSession.cookieName, value: "", maxAge: 0, path: "/", secure: false, httpOnly: true, sameSite: .lax)
+        Cookie(
+            name: PanelSession.cookieName, value: "", maxAge: 0, path: "/",
+            secure: secureCookies, httpOnly: true, sameSite: .lax)
     }
 
     private func redirect(_ location: String) -> Response {

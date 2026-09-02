@@ -14,6 +14,9 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.0"),
         .package(url: "https://github.com/hummingbird-project/hummingbird-auth.git", from: "2.0.0"),
+        // Already vendored transitively; declared directly so the panel can
+        // serve HTTPS (self-signed) when bound to the LAN without a tunnel.
+        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.0.0"),
     ],
     targets: [
         .target(
@@ -31,6 +34,8 @@ let package = Package(
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdAuth", package: "hummingbird-auth"),
                 .product(name: "HummingbirdBcrypt", package: "hummingbird-auth"),
+                .product(name: "HummingbirdTLS", package: "hummingbird"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
             ]
         ),
         .target(

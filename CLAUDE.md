@@ -53,9 +53,15 @@ relax them without asking.
 
 ## Web panel (security boundary)
 - Off by default; toggle in settings. Binds `127.0.0.1` by default; LAN binding is
-  an explicit opt-in with a visible warning. Default port 27180. Plain HTTP only —
-  TLS terminates at the tunnel (e.g. Cloudflare); never implement certificate
-  handling.
+  an explicit opt-in with a visible warning. Default port 27180. A tunnel that
+  terminates real TLS (e.g. Cloudflare) is still the **recommended** LAN path.
+- Optional built-in HTTPS: an explicit opt-in that serves the panel with a
+  self-signed cert (generated via the system `openssl`, key `0600`, stored in
+  Application Support) and marks session cookies `Secure`. It exists so LAN
+  binding without a tunnel does not send credentials in the clear — the tunnel
+  remains the recommendation. TLS is handled by `HummingbirdTLS`/`NIOSSL`; see
+  `SelfSignedCertificate.swift` and `PanelServer.serve`. Do not require it or make
+  it the default.
 - Real accounts, bcrypt-hashed passwords. Sessions in `HttpOnly` + `SameSite=Lax`
   cookies (`Strict` breaks the return navigation from Cloudflare Access) plus a
   custom-header CSRF check on mutating requests. Rate-limit failed logins.
@@ -77,9 +83,11 @@ relax them without asking.
 
 ## Dependencies
 Frozen at **Hummingbird 2** (HTTP server) and **Bcrypt via hummingbird-auth**
-(user-approved). SQLite via system `libsqlite3`. Web frontend is vanilla
-HTML/CSS/JS embedded in the bundle — no npm, no build toolchain. **Ask before
-adding any other dependency.**
+(user-approved). Built-in HTTPS uses **HummingbirdTLS** and **swift-nio-ssl**
+(NIOSSL) — both are part of the Hummingbird / swift-nio ecosystem already pulled
+in transitively, added when the optional TLS feature landed. SQLite via system
+`libsqlite3`. Web frontend is vanilla HTML/CSS/JS embedded in the bundle — no npm,
+no build toolchain. **Ask before adding any other dependency.**
 
 ## Distribution & hygiene
 - Source-only: no DMG, no notarization, no release pipeline (no paid Apple

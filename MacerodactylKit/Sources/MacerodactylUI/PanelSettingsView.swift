@@ -64,15 +64,22 @@ public struct PanelSettingsView: View {
                 .onChange(of: model.bindLAN) { _, on in model.setBindLAN(on) }
             if model.bindLAN {
                 Label(
-                    "The panel is reachable by any device on your local network over plain HTTP. Only enable this behind a trusted network or a tunnel (e.g. Cloudflare Tunnel).",
+                    model.tlsEnabled
+                        ? "Reachable on your local network over HTTPS (self-signed — browsers will warn once, which is expected)."
+                        : "Reachable by any device on your local network over plain HTTP. Turn on HTTPS below, or put a tunnel in front.",
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.caption)
-                .foregroundStyle(.orange)
+                .foregroundStyle(model.tlsEnabled ? Color.secondary : Color.orange)
             }
-            Text("Plain HTTP only — put TLS at a tunnel in front of it. The panel never runs after you quit the app.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+
+            Toggle("Serve over HTTPS (self-signed certificate)", isOn: $model.tlsEnabled)
+                .onChange(of: model.tlsEnabled) { _, on in model.setTLSEnabled(on) }
+            Text(
+                "HTTPS encrypts credentials on the wire for LAN access. The recommended setup is still a tunnel (e.g. Cloudflare Tunnel) that terminates real TLS. The panel never runs after you quit the app."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
     }
 

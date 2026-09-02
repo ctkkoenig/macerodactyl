@@ -28,6 +28,7 @@ public final class PanelAdminModel {
     public var enabled: Bool = AppSettings.panelEnabled
     public var port: Int = AppSettings.panelPort
     public var bindLAN: Bool = AppSettings.panelBindLAN
+    public var tlsEnabled: Bool = AppSettings.panelTLSEnabled
 
     public var users: [PanelUser] = []
     public var audit: [AuditEntry] = []
@@ -87,6 +88,11 @@ public final class PanelAdminModel {
 
     public func setBindLAN(_ on: Bool) {
         AppSettings.panelBindLAN = on
+        if AppSettings.panelEnabled { controller.applySettings() }
+    }
+
+    public func setTLSEnabled(_ on: Bool) {
+        AppSettings.panelTLSEnabled = on
         if AppSettings.panelEnabled { controller.applySettings() }
     }
 

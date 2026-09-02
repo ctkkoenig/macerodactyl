@@ -32,7 +32,14 @@ public final class PanelController {
         if let created = (try? await AccountManager(store: store).createFirstAdminIfNeeded()) ?? nil {
             firstAdminPassword = created.password
         }
-        let config = PanelServerConfig(port: AppSettings.panelPort, bindLAN: AppSettings.panelBindLAN)
+        // Keep the shared config in step so a daemon (if used) matches the GUI.
+        AppSettings.syncPanelConfig()
+
+        var tls: PanelServerConfig.TLSFiles?
+        if AppSettings.panelTLSEnabled, let paths = try? SelfSignedCertificate.ensure() {
+            tls = .init(certificatePath: paths.certificate, privateKeyPath: paths.privateKey)
+        }
+        let config = PanelServerConfig(port: AppSettings.panelPort, bindLAN: AppSettings.panelBindLAN, tls: tls)
         await server.stop()
         try? await server.start(config: config)
         isRunning = await server.isRunning
@@ -49,6 +56,7 @@ public final class PanelController {
     }
 
     public var localURL: String {
-        "http://127.0.0.1:\(AppSettings.panelPort)/"
+        let scheme = AppSettings.panelTLSEnabled ? "https" : "http"
+        return "\(scheme)://127.0.0.1:\(AppSettings.panelPort)/"
     }
 }

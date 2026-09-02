@@ -54,6 +54,32 @@ public enum AppSettings {
         }
     }
 
+    public static let panelTLSEnabledKey = "panelTLSEnabled"
+
+    /// Serve the panel over HTTPS with a self-signed cert. For LAN access
+    /// without a tunnel — encrypts credentials on the wire. Off by default.
+    public static var panelTLSEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: panelTLSEnabledKey) }
+        set {
+            UserDefaults.standard.set(newValue, forKey: panelTLSEnabledKey)
+            NotificationCenter.default.post(name: .macerodactylPanelSettingsChanged, object: nil)
+        }
+    }
+
+    /// The panel-daemon config derived from the current GUI settings. Writing it
+    /// to the shared file lets a `macerodactyld` process serve with the same
+    /// port/bind/TLS the GUI chose.
+    public static func currentPanelConfig() -> PanelConfig {
+        PanelConfig(
+            port: panelPort, bindLAN: panelBindLAN, dockerPathOverride: dockerPathOverride,
+            stacksRoot: stacksRoot.path, tlsEnabled: panelTLSEnabled)
+    }
+
+    /// Persists the shared panel config so the daemon stays in step with the GUI.
+    public static func syncPanelConfig() {
+        try? currentPanelConfig().save()
+    }
+
     /// Root under which stack folders (compose file + bind-mounted data) live.
     /// Defaults to ~/stacks; user-overridable, tilde-expanded.
     public static var stacksRoot: URL {

@@ -89,6 +89,26 @@ import Testing
         }
     }
 
+    @Test func sessionCookieIsSecureWhenServingHTTPS() async throws {
+        let harness = try await makeHarness()
+        let server = PanelServer(store: harness.store, containers: harness.service)
+        // Build the router as it would be when serving HTTPS.
+        let app = Application(router: server.buildRouter(secureCookies: true))
+        try await app.test(.router) { client in
+            let body = ByteBuffer(string: #"{"username":"admin","password":"admin-pw-123456"}"#)
+            try await client.execute(
+                uri: "/login", method: .post,
+                headers: [.contentType: "application/json", PanelHeaders.csrf: "1"], body: body
+            ) { response in
+                #expect(response.status == .ok)
+                let setCookie = response.headers[values: .setCookie].first { $0.hasPrefix(PanelSession.cookieName) }
+                #expect(setCookie?.contains("Secure") == true)
+                #expect(setCookie?.contains("HttpOnly") == true)
+                #expect(setCookie?.contains("SameSite=Lax") == true)
+            }
+        }
+    }
+
     @Test func healthzIsPublicAndLeaksNoSecrets() async throws {
         let harness = try await makeHarness()
         try await harness.app.test(.router) { client in

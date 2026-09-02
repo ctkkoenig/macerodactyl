@@ -49,11 +49,25 @@ if let created = try? await AccountManager(store: store).createFirstAdminIfNeede
 let containers = DaemonContainerService(cli: cli, stacksRoot: config.stacksRootURL)
 let server = PanelServer(store: store, containers: containers)
 
+// TLS is opt-in for LAN-without-tunnel: generate a self-signed cert on demand.
+var tlsFiles: PanelServerConfig.TLSFiles?
+if config.tlsEnabled {
+    do {
+        let paths = try SelfSignedCertificate.ensure()
+        tlsFiles = .init(certificatePath: paths.certificate, privateKeyPath: paths.privateKey)
+        logger.notice("HTTPS enabled with self-signed certificate at \(paths.certificate)")
+    } catch {
+        logger.notice("TLS requested but certificate generation failed (\(error)) — serving plain HTTP")
+    }
+}
+
+let scheme = tlsFiles == nil ? "http" : "https"
 let host = config.bindLAN ? "0.0.0.0 (LAN)" : "127.0.0.1 (local only)"
-logger.notice("macerodactyld serving on \(host):\(config.port) — docker at \(dockerURL.path)")
+logger.notice("macerodactyld serving \(scheme) on \(host):\(config.port) — docker at \(dockerURL.path)")
 
 do {
-    try await server.runUntilTerminated(config: .init(port: config.port, bindLAN: config.bindLAN), logger: logger)
+    try await server.runUntilTerminated(
+        config: .init(port: config.port, bindLAN: config.bindLAN, tls: tlsFiles), logger: logger)
 } catch {
     fail("server error: \(error)")
 }

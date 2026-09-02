@@ -43,7 +43,7 @@ Explore → Plan (record fork+choice) → Build → Verify (tests + REAL process
 - [ ] T1.2 Rate-limiter → SQLite (survives restart). AC: fail logins to lockout, restart the server process, lockout persists; unit test with a persistent store.
 - [ ] T1.3 Health endpoint `/healthz` (unauthenticated, minimal: ok + version + daemon reachability). AC: returns 200 JSON; no secrets; tested.
 - [ ] T1.4 WAL checkpointing, DB backup/restore, integrity checks. AC: a backup command produces a restorable copy; `PRAGMA integrity_check` wired; documented; tested.
-- [ ] T1.5 First-class TLS for LAN bind (self-signed or ACME) + `Secure` cookie when bound LAN. Tunnel stays recommended default. AC: enabling LAN can offer HTTPS; cookie gains Secure over TLS; verify a real TLS handshake locally (curl -k).
+- [x] T1.5 First-class TLS for LAN bind (self-signed or ACME) + `Secure` cookie when bound LAN. Tunnel stays recommended default. AC: enabling LAN can offer HTTPS; cookie gains Secure over TLS; verify a real TLS handshake locally (curl -k). **Done** 2026-09-02: self-signed via openssl, HummingbirdTLS/NIOSSL, Secure cookie, GUI toggle; verified live handshake; 149 tests green.
 
 ### Tier 2 — worth opening daily
 - [ ] T2.1 Container lifecycle: create, recreate, remove, image pull/prune, volumes, networks, env editing. Each: confirmation + audit + permission gate. Decide if the 5 perms suffice or lifecycle needs its own. AC: gated (403 without), audited, destructive ops confirmed server-side too; traversal/argv-injection safe.
