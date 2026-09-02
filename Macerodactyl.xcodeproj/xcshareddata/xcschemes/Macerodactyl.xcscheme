@@ -29,16 +29,6 @@
       shouldUseLaunchSchemeArgsEnv = "YES"
       shouldAutocreateTestPlan = "YES">
       <Testables>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "4F4A30B5C91E3D2FAD7EA92C"
-               BuildableName = "MacerodactylUITests.xctest"
-               BlueprintName = "MacerodactylUITests"
-               ReferencedContainer = "container:Macerodactyl.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

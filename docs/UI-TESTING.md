@@ -14,23 +14,28 @@ it launches the app, asserts a window appears, and asserts the app is still aliv
 a moment later (i.e. it didn't crash on first render). It's deliberately
 structural so it won't be brittle.
 
-## Wiring it up (one-time, ~2 minutes in Xcode)
+## Status
 
-The `Macerodactyl.xcodeproj` is hand-written and intentionally minimal, so the UI
-test target isn't checked in (adding one by editing `project.pbxproj` by hand is
-error-prone). To enable it:
+The **`MacerodactylUITests` target is wired into the project** (it builds, and
+`build-for-testing` succeeds), and the app honours a **`-uitest`** launch
+argument (`AppSettings.isUITesting`) that disables its continuous docker polling
+and the single-instance guard so the app can reach an idle state under test.
 
-1. Open `Macerodactyl.xcodeproj`.
-2. **File → New → Target… → macOS → UI Testing Bundle**. Name it
-   `MacerodactylUITests`; set **Target to be Tested** to `Macerodactyl`.
-3. Delete the template test file Xcode created and **add
-   `UITests/MacerodactylUITests.swift`** to the new target.
-4. Run with **Product → Test** (⌘U), or from the command line:
+It is **not in the default Test action**, and does not yet pass green, because on
+this setup `XCUIApplication.launch()`'s idle-wait does not settle (the launch
+times out even with polling disabled — a known macOS XCUITest friction with apps
+that keep a live run loop). Running it is therefore explicit and best-effort:
 
-   ```sh
-   xcodebuild test -project Macerodactyl.xcodeproj -scheme Macerodactyl \
-     -destination 'platform=macOS'
-   ```
+```sh
+# ad-hoc signed; needs a real windowserver + likely an Accessibility grant
+xcodebuild test -project Macerodactyl.xcodeproj -scheme Macerodactyl \
+  -destination 'platform=macOS' -only-testing:MacerodactylUITests CODE_SIGN_IDENTITY='-'
+```
+
+To get it green, the app likely needs to reach a fully-idle state under
+`-uitest` (e.g. also skip starting the in-process panel server, and avoid any
+continuously-updating SwiftUI view while testing). That work is left as a
+follow-up; the target and the launch hook are in place for it.
 
 ## In CI
 

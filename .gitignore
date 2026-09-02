@@ -5,3 +5,6 @@ xcuserdata/
 .swiftpm/
 DerivedData/
 .ci-dd/
+
+# Xcode UI-test derived data
+.uidd*/
