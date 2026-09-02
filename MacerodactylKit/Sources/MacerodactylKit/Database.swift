@@ -205,7 +205,7 @@ public enum PanelBackup {
 /// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
 /// scoping, and audit never have to be retrofitted into the data model.
 public enum PanelSchema {
-    public static let currentVersion = 5
+    public static let currentVersion = 6
 
     public static func migrate(_ db: Database) throws {
         if db.userVersion < 1 {
@@ -291,6 +291,19 @@ public enum PanelSchema {
             // recreate / remove). Existing grants default to no lifecycle access.
             try db.execute("ALTER TABLE grants ADD COLUMN perm_lifecycle INTEGER NOT NULL DEFAULT 0")
             db.userVersion = 5
+        }
+        if db.userVersion < 6 {
+            // Optional TOTP 2FA per account, and richer session rows so a user can
+            // see and revoke their active sessions (where/when signed in).
+            try db.execute(
+                """
+                ALTER TABLE users ADD COLUMN totp_secret TEXT;
+                ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE sessions ADD COLUMN created_ip TEXT;
+                ALTER TABLE sessions ADD COLUMN user_agent TEXT;
+                ALTER TABLE sessions ADD COLUMN last_seen TEXT;
+                """)
+            db.userVersion = 6
         }
     }
 }
@@ -418,11 +431,84 @@ public final class PanelDataStore: Sendable {
 
     // MARK: Sessions (tokens are stored hashed; the raw token lives only in the cookie)
 
-    public func insertSession(tokenHash: String, userID: Int64, expiresAt: String) throws {
+    public func insertSession(
+        tokenHash: String, userID: Int64, expiresAt: String, ip: String? = nil, userAgent: String? = nil
+    ) throws {
         try db.run(
-            "INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)",
-            [.text(tokenHash), .integer(userID), .text(expiresAt)]
+            "INSERT INTO sessions (token_hash, user_id, expires_at, created_ip, user_agent, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                .text(tokenHash), .integer(userID), .text(expiresAt),
+                ip.map(SQLValue.text) ?? .null, userAgent.map(SQLValue.text) ?? .null,
+                ip == nil ? .null : .text(expiresAt),
+            ]
         )
+    }
+
+    public struct SessionInfo: Sendable, Equatable {
+        public let tokenHash: String
+        public let createdAt: String
+        public let lastSeen: String?
+        public let ip: String?
+        public let userAgent: String?
+    }
+
+    /// A user's active (unexpired) sessions, newest first.
+    public func listSessions(userID: Int64, now: String) throws -> [SessionInfo] {
+        try db.query(
+            """
+            SELECT token_hash, created_at, last_seen, created_ip, user_agent FROM sessions
+            WHERE user_id = ? AND expires_at > ? ORDER BY created_at DESC
+            """, [.integer(userID), .text(now)]
+        ).map {
+            SessionInfo(
+                tokenHash: $0["token_hash"]?.asString ?? "", createdAt: $0["created_at"]?.asString ?? "",
+                lastSeen: $0["last_seen"]?.asString, ip: $0["created_ip"]?.asString, userAgent: $0["user_agent"]?.asString)
+        }
+    }
+
+    /// Updates a session's last-seen timestamp (best-effort, called on use).
+    public func touchSession(tokenHash: String, at: String) throws {
+        try db.run("UPDATE sessions SET last_seen = ? WHERE token_hash = ?", [.text(at), .text(tokenHash)])
+    }
+
+    /// Deletes a session ONLY if it belongs to `userID` — a user can revoke their
+    /// own sessions, never someone else's. Returns whether a row was removed.
+    @discardableResult
+    public func deleteSession(userID: Int64, tokenHash: String) throws -> Bool {
+        let existed =
+            try db.query(
+                "SELECT 1 AS x FROM sessions WHERE token_hash = ? AND user_id = ?",
+                [.text(tokenHash), .integer(userID)]
+            ).first != nil
+        if existed {
+            try db.run("DELETE FROM sessions WHERE token_hash = ? AND user_id = ?", [.text(tokenHash), .integer(userID)])
+        }
+        return existed
+    }
+
+    /// Revokes all of a user's sessions except the one given (sign out everywhere else).
+    public func deleteOtherSessions(userID: Int64, keepTokenHash: String) throws {
+        try db.run(
+            "DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?", [.integer(userID), .text(keepTokenHash)])
+    }
+
+    // MARK: TOTP 2FA
+
+    /// (secret, enabled) for a user. A non-nil secret with enabled=false is a
+    /// pending enrollment (secret generated, not yet confirmed by a valid code).
+    public func totpState(userID: Int64) throws -> (secret: String?, enabled: Bool) {
+        guard let row = try db.query("SELECT totp_secret, totp_enabled FROM users WHERE id = ?", [.integer(userID)]).first
+        else { return (nil, false) }
+        return (row["totp_secret"]?.asString, (row["totp_enabled"]?.asInt ?? 0) != 0)
+    }
+
+    public func setTOTPSecret(userID: Int64, secret: String?) throws {
+        try db.run(
+            "UPDATE users SET totp_secret = ? WHERE id = ?", [secret.map(SQLValue.text) ?? .null, .integer(userID)])
+    }
+
+    public func setTOTPEnabled(userID: Int64, enabled: Bool) throws {
+        try db.run("UPDATE users SET totp_enabled = ? WHERE id = ?", [.integer(enabled ? 1 : 0), .integer(userID)])
     }
 
     public func sessionUser(tokenHash: String, now: String) throws -> PanelUser? {

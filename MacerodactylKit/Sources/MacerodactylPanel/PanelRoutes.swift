@@ -54,6 +54,16 @@ struct PanelRoutes {
         api.get("me", use: apiMe)
         api.get("stats", use: apiStatsSnapshot)
 
+        // Account self-service: 2FA (TOTP) enrollment + active session management.
+        // Each acts only on the calling user's own account.
+        api.get("2fa/status", use: api2FAStatus)
+        api.post("2fa/begin", use: api2FABegin)
+        api.post("2fa/confirm", use: api2FAConfirm)
+        api.post("2fa/disable", use: api2FADisable)
+        api.get("sessions", use: apiSessions)
+        api.delete("sessions/:id", use: apiSessionRevoke)
+        api.post("sessions/revoke-others", use: apiSessionsRevokeOthers)
+
         // Every container route inherits the scoping middleware; none re-checks.
         let scoped = api.group("containers").add(middleware: ContainerScopeMiddleware(store: store))
         scoped.get(use: apiContainers)
@@ -139,6 +149,8 @@ struct PanelRoutes {
     struct LoginBody: Decodable {
         let username: String
         let password: String
+        /// The 6-digit TOTP code, required only when the account has 2FA enabled.
+        let totp: String?
     }
 
     @Sendable func login(_ request: Request, context: PanelRequestContext) async throws -> Response {
@@ -166,9 +178,32 @@ struct PanelRoutes {
             return json(["error": "Invalid username or password"], status: .unauthorized)
         }
 
+        // Second factor: if the account has confirmed TOTP, a valid code is
+        // required. A missing code asks for one (200 `totpRequired`); a wrong code
+        // is a failed attempt (counts toward the rate limit, same as a bad
+        // password), so 2FA can't be brute-forced any faster than the password.
+        let totp = (try? store.totpState(userID: user.id)) ?? (secret: nil, enabled: false)
+        if totp.enabled, let secret = totp.secret {
+            guard let code = body.totp, !code.isEmpty else {
+                return json(["totpRequired": true], status: .ok)
+            }
+            guard TOTP.verify(code, secret: secret) else {
+                await rateLimiter.recordFailure(username: body.username, ip: ip)
+                audit(user: user.username, action: "login.totp_failure", outcome: "denied", ip: ip)
+                struct TOTPError: Encodable {
+                    let error: String
+                    let totpRequired: Bool
+                }
+                return encode(TOTPError(error: "Invalid authentication code", totpRequired: true), status: .unauthorized)
+            }
+        }
+
         await rateLimiter.recordSuccess(username: body.username, ip: ip)
         let token = PanelSession.newToken()
-        try store.insertSession(tokenHash: PanelSession.hashToken(token), userID: user.id, expiresAt: PanelSession.expiry())
+        let userAgent = request.headers[.userAgent].map { String($0.prefix(256)) }
+        try store.insertSession(
+            tokenHash: PanelSession.hashToken(token), userID: user.id, expiresAt: PanelSession.expiry(),
+            ip: ip, userAgent: userAgent)
         audit(user: user.username, action: "login.success", outcome: "ok", ip: ip)
 
         var response = json(["ok": true])
@@ -186,6 +221,117 @@ struct PanelRoutes {
         var response = json(["ok": true])
         response.setCookie(expiredCookie())
         return response
+    }
+
+    // MARK: 2FA (TOTP) — self-service
+
+    struct TOTPCodeBody: Decodable { let code: String }
+
+    @Sendable func api2FAStatus(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let state = (try? store.totpState(userID: user.id)) ?? (secret: nil, enabled: false)
+        return encode(["enabled": state.enabled, "pending": state.secret != nil && !state.enabled])
+    }
+
+    /// Starts enrollment: generate a fresh secret (stored, not yet enabled) and
+    /// return it + the provisioning URI for an authenticator. Confirm with a code.
+    @Sendable func api2FABegin(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let state = (try? store.totpState(userID: user.id)) ?? (secret: nil, enabled: false)
+        if state.enabled { return json(["error": "2FA is already enabled. Disable it first to re-enroll."], status: .conflict) }
+        let secret = TOTP.generateSecret()
+        try store.setTOTPSecret(userID: user.id, secret: secret)
+        try store.setTOTPEnabled(userID: user.id, enabled: false)
+        audit(user: user.username, action: "2fa.begin", outcome: "ok", ip: context.clientIP)
+        return encode([
+            "secret": secret,
+            "uri": TOTP.provisioningURI(secret: secret, account: user.username),
+        ])
+    }
+
+    /// Confirms enrollment: a valid code proves the authenticator is set up, so
+    /// enable 2FA. From here on, login requires a code.
+    @Sendable func api2FAConfirm(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        guard let body = try? await request.decode(as: TOTPCodeBody.self, context: context) else {
+            return json(["error": "code required"], status: .badRequest)
+        }
+        let state = (try? store.totpState(userID: user.id)) ?? (secret: nil, enabled: false)
+        guard let secret = state.secret, !state.enabled else {
+            return json(["error": "No pending enrollment. Start with begin."], status: .conflict)
+        }
+        guard TOTP.verify(body.code, secret: secret) else {
+            audit(user: user.username, action: "2fa.confirm", outcome: "denied", ip: context.clientIP)
+            return json(["error": "That code didn't match. Check your authenticator's clock and try again."], status: .unauthorized)
+        }
+        try store.setTOTPEnabled(userID: user.id, enabled: true)
+        audit(user: user.username, action: "2fa.enabled", outcome: "ok", ip: context.clientIP)
+        return json(["ok": true])
+    }
+
+    /// Disables 2FA — requires a current code (proving it's really the owner, not
+    /// just a hijacked session), then clears the secret.
+    @Sendable func api2FADisable(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        guard let body = try? await request.decode(as: TOTPCodeBody.self, context: context) else {
+            return json(["error": "code required"], status: .badRequest)
+        }
+        let state = (try? store.totpState(userID: user.id)) ?? (secret: nil, enabled: false)
+        guard state.enabled, let secret = state.secret else { return json(["ok": true]) }  // already off
+        guard TOTP.verify(body.code, secret: secret) else {
+            audit(user: user.username, action: "2fa.disable", outcome: "denied", ip: context.clientIP)
+            return json(["error": "Invalid code"], status: .unauthorized)
+        }
+        try store.setTOTPEnabled(userID: user.id, enabled: false)
+        try store.setTOTPSecret(userID: user.id, secret: nil)
+        audit(user: user.username, action: "2fa.disabled", outcome: "ok", ip: context.clientIP)
+        return json(["ok": true])
+    }
+
+    // MARK: Sessions — self-service
+
+    struct SessionDTO: Encodable {
+        let id: String
+        let current: Bool
+        let createdAt: String
+        let lastSeen: String?
+        let ip: String?
+        let userAgent: String?
+    }
+
+    private func currentTokenHash(_ request: Request) -> String? {
+        guard let raw = request.cookies[PanelSession.cookieName]?.value else { return nil }
+        return PanelSession.hashToken(raw)
+    }
+
+    @Sendable func apiSessions(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let current = currentTokenHash(request)
+        let sessions = (try? store.listSessions(userID: user.id, now: PanelSession.timestamp())) ?? []
+        return encode(
+            sessions.map {
+                SessionDTO(
+                    id: $0.tokenHash, current: $0.tokenHash == current, createdAt: $0.createdAt,
+                    lastSeen: $0.lastSeen, ip: $0.ip, userAgent: $0.userAgent)
+            })
+    }
+
+    @Sendable func apiSessionRevoke(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let id = try context.parameters.require("id")
+        // Scoped delete — a user can only revoke a session that is their own.
+        let removed = (try? store.deleteSession(userID: user.id, tokenHash: id)) ?? false
+        guard removed else { throw notFound() }
+        audit(user: user.username, action: "session.revoke", outcome: "ok", ip: context.clientIP)
+        return json(["ok": true])
+    }
+
+    @Sendable func apiSessionsRevokeOthers(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        guard let keep = currentTokenHash(request) else { throw notFound() }
+        try store.deleteOtherSessions(userID: user.id, keepTokenHash: keep)
+        audit(user: user.username, action: "session.revoke_others", outcome: "ok", ip: context.clientIP)
+        return json(["ok": true])
     }
 
     // MARK: API (JSON)

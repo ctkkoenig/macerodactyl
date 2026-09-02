@@ -55,7 +55,89 @@ const enc = encodeURIComponent;
 const api = suffix => '/api/containers/' + enc(current) + suffix;
 
 document.getElementById('signout').onclick = async () => { await fetch('/logout', { method: 'POST', headers: CSRF }); location.href = '/login'; };
+document.getElementById('account').onclick = () => openAccount();
 backBtn.onclick = () => showHome();
+
+// --- account & security (2FA + sessions) ------------------------------------
+async function openAccount() {
+  const body = h('div', {});
+  const sheet = h('div', { class: 'sheet' },
+    h('header', {},
+      h('button', { class: 'lnk', text: 'Close', onclick: () => sheet.remove() }),
+      h('span', { class: 'fp' }, me.username ? ('Signed in as ' + me.username) : 'Account & security')),
+    h('div', { style: 'overflow:auto; flex:1; padding:4px 2px 20px;' }, body));
+  document.body.appendChild(sheet);
+  await renderAccount(body);
+}
+async function renderAccount(body) {
+  body.replaceChildren(h('p', { class: 'msg', text: 'Loading…' }));
+  const [twofa, sessions] = await Promise.all([
+    jget('/api/2fa/status').catch(() => ({ enabled: false })),
+    jget('/api/sessions').catch(() => []),
+  ]);
+  body.replaceChildren(twoFactorSection(twofa, body), sessionsSection(sessions, body));
+}
+function twoFactorSection(status, body) {
+  const wrap = h('div', {}, h('h2', { text: 'Two-factor authentication' }));
+  if (status.enabled) {
+    wrap.append(
+      h('div', { class: 'note okrun', text: '2FA is ON. A code from your authenticator is required at login.' }),
+      h('div', { class: 'field' },
+        h('input', { id: 'off2fa', placeholder: 'Current 6-digit code', inputmode: 'numeric', autocomplete: 'one-time-code' }),
+        h('button', { class: 'danger', style: 'width:auto;margin:0;', text: 'Turn off', onclick: async () => {
+          const code = document.getElementById('off2fa').value.trim();
+          const r = await fetch('/api/2fa/disable', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ code }) });
+          if (r.ok) renderAccount(body); else alert((await r.json().catch(() => ({}))).error || 'Failed');
+        } })));
+  } else {
+    wrap.append(
+      h('div', { class: 'note', text: 'Add a second factor. You will need an authenticator app (e.g. 1Password, Google Authenticator).' }),
+      h('button', { class: 'primary', text: 'Set up 2FA', onclick: () => beginEnroll(body) }));
+  }
+  return wrap;
+}
+async function beginEnroll(body) {
+  let data; try { data = await (await fetch('/api/2fa/begin', { method: 'POST', headers: CSRF })).json(); } catch (e) { alert('Failed'); return; }
+  if (!data.secret) { alert(data.error || 'Failed'); return; }
+  const panel = h('div', {},
+    h('h2', { text: 'Set up 2FA' }),
+    h('div', { class: 'note', text: 'Add this key to your authenticator app (or open the link on this device), then enter the current code to confirm.' }),
+    h('div', { class: 'kv' }, h('span', { class: 'kk', text: 'Secret' }), h('span', { class: 'vv', text: data.secret })),
+    h('div', { class: 'kv' }, h('span', { class: 'kk', text: 'Link' }), h('a', { class: 'vv', href: data.uri, style: 'color:var(--accent)', text: 'otpauth://…' })),
+    h('div', { class: 'field' },
+      h('input', { id: 'on2fa', placeholder: '6-digit code', inputmode: 'numeric', autocomplete: 'one-time-code' }),
+      h('button', { class: 'primary', style: 'width:auto;margin:0;', text: 'Confirm', onclick: async () => {
+        const code = document.getElementById('on2fa').value.trim();
+        const r = await fetch('/api/2fa/confirm', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ code }) });
+        if (r.ok) renderAccount(body); else alert((await r.json().catch(() => ({}))).error || 'Failed');
+      } })));
+  body.replaceChildren(panel);
+}
+function sessionsSection(sessions, body) {
+  const wrap = h('div', {}, h('h2', { text: 'Active sessions' }));
+  if (Array.isArray(sessions) && sessions.length > 1) {
+    wrap.append(h('button', { class: 'danger', text: 'Sign out everywhere else', onclick: async () => {
+      await fetch('/api/sessions/revoke-others', { method: 'POST', headers: CSRF });
+      renderAccount(body);
+    } }));
+  }
+  for (const s of (sessions || [])) {
+    const when = s.lastSeen || s.createdAt || '';
+    const label = (s.ip || 'unknown') + (s.current ? '  · this device' : '');
+    const row = h('div', { class: 'fileitem' },
+      h('span', { class: 'meta', style: 'flex:1;min-width:0;' },
+        h('div', { class: 'nm', text: label }),
+        h('div', { class: 'st', style: 'font-size:12px;color:var(--muted);', text: when })));
+    if (!s.current) {
+      row.append(h('button', { class: 'act del', title: 'Revoke', text: '✕', onclick: async () => {
+        await fetch('/api/sessions/' + enc(s.id), { method: 'DELETE', headers: CSRF });
+        renderAccount(body);
+      } }));
+    }
+    wrap.append(row);
+  }
+  return wrap;
+}
 // Tear everything down when the tab is hidden (phone backgrounds Safari) or
 // unloaded — no docker logs/stats keeps running server-side for a lost tab.
 document.addEventListener('visibilitychange', () => {
