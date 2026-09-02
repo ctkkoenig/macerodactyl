@@ -46,8 +46,8 @@ Explore → Plan (record fork+choice) → Build → Verify (tests + REAL process
 - [x] T1.5 First-class TLS for LAN bind (self-signed or ACME) + `Secure` cookie when bound LAN. Tunnel stays recommended default. AC: enabling LAN can offer HTTPS; cookie gains Secure over TLS; verify a real TLS handshake locally (curl -k). **Done** 2026-09-02: self-signed via openssl, HummingbirdTLS/NIOSSL, Secure cookie, GUI toggle; verified live handshake; 149 tests green.
 
 ### Tier 2 — worth opening daily
-- [ ] T2.1 Container lifecycle: create, recreate, remove, image pull/prune, volumes, networks, env editing. Each: confirmation + audit + permission gate. Decide if the 5 perms suffice or lifecycle needs its own. AC: gated (403 without), audited, destructive ops confirmed server-side too; traversal/argv-injection safe.
-- [ ] T2.2 Compose: view + apply compose file with streamed output. AC: gated on files or a new perm; streamed via SSE; confined to stack folder.
+- [x] T2.1 Container lifecycle: create, recreate, remove, image pull/prune, volumes, networks, env editing. Each: confirmation + audit + permission gate. Decide if the 5 perms suffice or lifecycle needs its own. AC: gated (403 without), audited, destructive ops confirmed server-side too; traversal/argv-injection safe.
+- [x] T2.2 Compose: view + apply compose file with streamed output. AC: gated on files or a new perm; streamed via SSE; confined to stack folder.
 - [x] T2.3 Real file manager: upload, download, mkdir, rename, delete, binary handling — all via existing confinement. AC: re-run ALL traversal shapes against EVERY new endpoint (HTTP-level tests); binary download works; no parallel path.
 - [x] T2.4 Retained metrics (ring-buffer stats → SQLite) + persistent searchable logs + download. Retention policy w/ safe default (won't fill disk). AC: retention enforced + tested; disk cost bounded; search works.
 
