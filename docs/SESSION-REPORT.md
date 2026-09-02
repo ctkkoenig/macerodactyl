@@ -102,7 +102,7 @@ portability check. Live checks against **real** things — the daemon serving ov
 a socket, a TLS handshake, a backup of the real `panel.sqlite`, the metrics
 pipeline against real fixtures, the web panel driven in Chrome, the Linux
 container serving. Fixtures only (`testweb`, `fixture-bare`, `fixture-mc`); the
-real workloads (`workload-a`, `workload-b`) and the real `panel.sqlite` were never
+real workloads (your real workloads) and the real `panel.sqlite` were never
 touched — verified by mtime at the end.
 
 ## The final review earned its keep
