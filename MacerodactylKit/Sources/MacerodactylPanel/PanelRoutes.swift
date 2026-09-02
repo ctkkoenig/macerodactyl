@@ -18,6 +18,7 @@ struct PanelRoutes {
 
         let api = router.group("api").add(middleware: RequireAuth())
         api.get("me", use: apiMe)
+        api.get("stats", use: apiStatsSnapshot)
 
         // Every container route inherits the scoping middleware; none re-checks.
         let scoped = api.group("containers").add(middleware: ContainerScopeMiddleware(store: store))
@@ -25,10 +26,14 @@ struct PanelRoutes {
         scoped.get(":name", use: apiContainerDetail)
         scoped.post(":name/power", use: apiPower)
         scoped.get(":name/logs", use: apiLogs)
+        scoped.get(":name/stats", use: apiStatsStream)
         scoped.post(":name/console", use: apiConsole)
         scoped.get(":name/files", use: apiFilesList)
         scoped.get(":name/files/content", use: apiFileRead)
         scoped.put(":name/files/content", use: apiFileWrite)
+        scoped.get(":name/schedule", use: apiScheduleGet)
+        scoped.post(":name/schedule", use: apiScheduleSet)
+        scoped.delete(":name/schedule", use: apiScheduleDelete)
     }
 
     // MARK: HTML pages
@@ -203,21 +208,69 @@ struct PanelRoutes {
         let name = try context.parameters.require("name")
         guard let stream = await containers.logLines(containerName: name) else { throw notFound() }
         audit(user: user.username, action: "container.logs", container: name, outcome: "ok", ip: context.clientIP)
+        return Self.sseResponse(payloads: stream)
+    }
 
-        // Server-Sent Events with a heartbeat. A log stream can be idle for a
-        // long time (a container that isn't logging), during which the write
-        // loop would be parked awaiting the next line and never notice the
-        // client left. The heartbeat forces a write every few seconds; the
-        // first write after a disconnect (phone drops wifi / backgrounds the
-        // browser) throws, which drops the merged stream, cancels the docker
-        // log task, and fires its onTermination — killing the `docker logs -f`
-        // child. So no process leaks per abandoned connection.
+    // MARK: Stats (snapshot + SSE)
+
+    struct StatsDTO: Encodable {
+        let name: String
+        let cpuPercent, memUsedBytes, memLimitBytes, memPercent, netRxBytes, netTxBytes: Double
+        let pids: Int
+        init(_ s: ContainerStats) {
+            name = s.name; cpuPercent = s.cpuPercent; memUsedBytes = s.memUsedBytes
+            memLimitBytes = s.memLimitBytes; memPercent = s.memPercent
+            netRxBytes = s.netRxBytes; netTxBytes = s.netTxBytes; pids = s.pids
+        }
+    }
+
+    @Sendable func apiStatsSnapshot(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let engine = try store.authorizationEngine(for: user)
+        // Filtered to viewable containers only — no stats leak for ungranted ones.
+        let all = await containers.statsSnapshot()
+        let visible = all.filter { engine.canView(containerNamed: $0.key) }
+        return encode(visible.values.map(StatsDTO.init).sorted { $0.name < $1.name })
+    }
+
+    @Sendable func apiStatsStream(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let stream = await containers.statsStream(containerName: name) else {
+            // Container not running / no stats: a short-lived SSE that says so,
+            // rather than 404 (the container may exist but be stopped).
+            return Self.sseResponse(payloads: singleMessage("{\"unavailable\":true}"))
+        }
+        audit(user: user.username, action: "container.stats", container: name, outcome: "ok", ip: context.clientIP)
+        // Encode each measured sample as JSON; same heartbeat + teardown as logs,
+        // so this stream dies with the connection and the poll loop stops — no
+        // docker stats runs after the client is gone.
+        let json = stream.map { sample -> String in
+            let data = (try? JSONEncoder().encode(StatsDTO(sample))) ?? Data("{}".utf8)
+            return String(decoding: data, as: UTF8.self)
+        }
+        return Self.sseResponse(payloads: json)
+    }
+
+    private func singleMessage(_ text: String) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(text)
+            continuation.finish()
+        }
+    }
+
+    /// Wraps any async payload sequence as a heartbeat SSE response. Each
+    /// payload becomes a `data:` event; a `: ping` every 10s forces a write so
+    /// a vanished client is noticed, which cancels the upstream task (killing
+    /// its docker process / stopping its poll loop). No stream outlives its
+    /// connection.
+    static func sseResponse<S: AsyncSequence & Sendable>(payloads: S) -> Response where S.Element == String {
         let body = ResponseBody(contentLength: nil) { writer in
             let events = AsyncThrowingStream<ByteBuffer, Error> { continuation in
-                let logTask = Task {
+                let producer = Task {
                     do {
-                        for try await line in stream {
-                            let event = "data: \(line.replacingOccurrences(of: "\n", with: "\ndata: "))\n\n"
+                        for try await payload in payloads {
+                            let event = "data: \(payload.replacingOccurrences(of: "\n", with: "\ndata: "))\n\n"
                             continuation.yield(ByteBuffer(string: event))
                         }
                         continuation.finish()
@@ -225,24 +278,17 @@ struct PanelRoutes {
                         continuation.finish(throwing: error)
                     }
                 }
-                let heartbeatTask = Task {
+                let heartbeat = Task {
                     while !Task.isCancelled {
                         try? await Task.sleep(for: .seconds(10))
                         continuation.yield(ByteBuffer(string: ": ping\n\n"))
                     }
                 }
-                continuation.onTermination = { _ in
-                    logTask.cancel()      // drops the docker stream → process terminated
-                    heartbeatTask.cancel()
-                }
+                continuation.onTermination = { _ in producer.cancel(); heartbeat.cancel() }
             }
             do {
-                for try await event in events {
-                    try await writer.write(event)
-                }
-            } catch {
-                // Client gone or stream ended.
-            }
+                for try await event in events { try await writer.write(event) }
+            } catch {}
             try? await writer.finish(nil)
         }
         return Response(status: .ok, headers: [
@@ -250,6 +296,70 @@ struct PanelRoutes {
             .cacheControl: "no-cache",
             .connection: "keep-alive",
         ], body: body)
+    }
+
+    // MARK: Schedules (gated on the schedules permission)
+
+    struct ScheduleDTO: Encodable {
+        let hour, minute: Int
+        let weekdays: [Int]
+        let description: String
+        let lastRun: LastRun?
+        struct LastRun: Encodable { let date: String; let outcome: String; let message: String }
+    }
+    struct ScheduleBody: Decodable { let hour: Int; let minute: Int; let weekdays: [Int]? }
+
+    @Sendable func apiScheduleGet(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let name = try context.parameters.require("name")
+        guard await containers.container(named: name) != nil else { throw notFound() }
+        guard let (schedule, last) = await containers.schedule(containerName: name) else {
+            return encode(["schedule": Optional<ScheduleDTO>.none])
+        }
+        let dto = ScheduleDTO(
+            hour: schedule.hour, minute: schedule.minute, weekdays: schedule.weekdays.sorted(),
+            description: schedule.timeDescription,
+            lastRun: last.map { .init(date: PanelSession.timestamp($0.date), outcome: outcomeString($0.outcome), message: $0.message) }
+        )
+        return encode(["schedule": dto])
+    }
+
+    @Sendable func apiScheduleSet(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard await containers.container(named: name) != nil else { throw notFound() }
+        guard let body = try? await request.decode(as: ScheduleBody.self, context: context),
+              (0...23).contains(body.hour), (0...59).contains(body.minute) else {
+            return json(["error": "hour 0–23 and minute 0–59 required"], status: .badRequest)
+        }
+        do {
+            try await containers.setSchedule(containerName: name, hour: body.hour, minute: body.minute,
+                                             weekdays: Set(body.weekdays ?? []))
+            audit(user: user.username, action: "container.schedules", container: name, outcome: "ok",
+                  ip: context.clientIP, detail: "set \(String(format: "%02d:%02d", body.hour, body.minute))")
+            return json(["ok": true])
+        } catch {
+            audit(user: user.username, action: "container.schedules", container: name, outcome: "error",
+                  ip: context.clientIP, detail: "\(error)")
+            return json(["error": "\(error)"], status: .internalServerError)
+        }
+    }
+
+    @Sendable func apiScheduleDelete(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard await containers.container(named: name) != nil else { throw notFound() }
+        do {
+            try await containers.removeSchedule(containerName: name)
+            audit(user: user.username, action: "container.schedules", container: name, outcome: "ok",
+                  ip: context.clientIP, detail: "removed")
+            return json(["ok": true])
+        } catch {
+            return json(["error": "\(error)"], status: .internalServerError)
+        }
+    }
+
+    private func outcomeString(_ outcome: ScheduleOutcome) -> String {
+        switch outcome { case .success: "ok"; case .failed: "failed"; case .timedOut: "timedOut" }
     }
 
     // MARK: Console

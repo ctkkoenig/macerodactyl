@@ -114,7 +114,7 @@ public final class Database: @unchecked Sendable {
 /// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
 /// scoping, and audit never have to be retrofitted into the data model.
 public enum PanelSchema {
-    public static let currentVersion = 1
+    public static let currentVersion = 2
 
     public static func migrate(_ db: Database) throws {
         if db.userVersion < 1 {
@@ -153,6 +153,12 @@ public enum PanelSchema {
                 );
                 """)
             db.userVersion = 1
+        }
+        if db.userVersion < 2 {
+            // Add the fifth permission (schedule management over HTTP).
+            // Existing grants default to no schedule access.
+            try db.execute("ALTER TABLE grants ADD COLUMN perm_schedules INTEGER NOT NULL DEFAULT 0")
+            db.userVersion = 2
         }
     }
 }
@@ -238,15 +244,17 @@ public final class PanelDataStore: Sendable {
             )
         } else {
             try db.run("""
-                INSERT INTO grants (user_id, container_name, perm_view, perm_power, perm_files, perm_console)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO grants (user_id, container_name, perm_view, perm_power, perm_files, perm_console, perm_schedules)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id, container_name) DO UPDATE SET
                     perm_view=excluded.perm_view, perm_power=excluded.perm_power,
-                    perm_files=excluded.perm_files, perm_console=excluded.perm_console
+                    perm_files=excluded.perm_files, perm_console=excluded.perm_console,
+                    perm_schedules=excluded.perm_schedules
                 """,
                 [.integer(userID), .text(containerName),
                  .integer(grant.view ? 1 : 0), .integer(grant.power ? 1 : 0),
-                 .integer(grant.files ? 1 : 0), .integer(grant.console ? 1 : 0)]
+                 .integer(grant.files ? 1 : 0), .integer(grant.console ? 1 : 0),
+                 .integer(grant.schedules ? 1 : 0)]
             )
         }
     }
@@ -259,7 +267,8 @@ public final class PanelDataStore: Sendable {
                 view: (row["perm_view"]?.asInt ?? 0) != 0,
                 power: (row["perm_power"]?.asInt ?? 0) != 0,
                 files: (row["perm_files"]?.asInt ?? 0) != 0,
-                console: (row["perm_console"]?.asInt ?? 0) != 0
+                console: (row["perm_console"]?.asInt ?? 0) != 0,
+                schedules: (row["perm_schedules"]?.asInt ?? 0) != 0
             )
         }
         return result

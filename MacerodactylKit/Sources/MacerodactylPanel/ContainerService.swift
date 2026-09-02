@@ -20,6 +20,16 @@ public protocol ContainerService: Sendable {
     func runConsole(containerName: String, command: String) async -> ConsoleEntry?
     /// File service for a container, or nil if it has no stack folder.
     func fileService(containerName: String) async -> FileService?
+    /// Live stats snapshot for all containers (for the landing).
+    func statsSnapshot() async -> [String: ContainerStats]
+    /// Live stats stream for one container (for the focused view).
+    func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>?
+    /// The current schedule for a container, if any, plus its last run.
+    func schedule(containerName: String) async -> (RestartSchedule, ScheduleRunResult?)?
+    /// Install/replace a schedule. Throws on failure.
+    func setSchedule(containerName: String, hour: Int, minute: Int, weekdays: Set<Int>) async throws
+    /// Remove a container's schedule (no-op if none).
+    func removeSchedule(containerName: String) async throws
 }
 
 /// Live implementation backed by the shared `ContainerStore` (native source of
@@ -79,6 +89,36 @@ public struct LiveContainerService: ContainerService {
     public func fileService(containerName: String) async -> FileService? {
         guard let container = await container(named: containerName) else { return nil }
         return FileService(container: container, stacksRoot: stacksRoot())
+    }
+
+    public func statsSnapshot() async -> [String: ContainerStats] {
+        guard let cli = await MainActor.run(body: { store.cli }) else { return [:] }
+        return (try? await cli.statsSnapshot()) ?? [:]
+    }
+
+    public func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>? {
+        guard let container = await container(named: containerName), container.isRunning,
+              let cli = await MainActor.run(body: { store.cli }) else { return nil }
+        return cli.statsStream(containerID: container.id)
+    }
+
+    public func schedule(containerName: String) async -> (RestartSchedule, ScheduleRunResult?)? {
+        guard let cli = await MainActor.run(body: { store.cli }),
+              let service = try? ScheduleService(dockerPath: cli.binary.path),
+              let schedule = service.schedule(forContainerName: containerName) else { return nil }
+        return (schedule, service.lastResult(for: schedule))
+    }
+
+    public func setSchedule(containerName: String, hour: Int, minute: Int, weekdays: Set<Int>) async throws {
+        guard let cli = await MainActor.run(body: { store.cli }) else { throw ContainerServiceError.notFound }
+        let service = try ScheduleService(dockerPath: cli.binary.path)
+        try service.install(RestartSchedule(containerName: containerName, hour: hour, minute: minute, weekdays: weekdays))
+    }
+
+    public func removeSchedule(containerName: String) async throws {
+        guard let cli = await MainActor.run(body: { store.cli }) else { throw ContainerServiceError.notFound }
+        let service = try ScheduleService(dockerPath: cli.binary.path)
+        try service.remove(containerName: containerName)
     }
 }
 

@@ -99,9 +99,10 @@ struct ContainerScopeMiddleware: RouterMiddleware {
     /// place this mapping lives.
     static func requiredPermission(path: String) -> ContainerPermission {
         if path.contains("/files") { return .files }
+        if path.contains("/schedule") { return .schedules }
         if path.hasSuffix("/console") { return .console }
         if path.hasSuffix("/power") { return .power }
-        return .view // detail, logs
+        return .view // detail, logs, stats
     }
 
     private func auditAction(for permission: ContainerPermission) -> String {
@@ -110,6 +111,7 @@ struct ContainerScopeMiddleware: RouterMiddleware {
         case .power: "container.power"
         case .files: "container.files"
         case .console: "container.console"
+        case .schedules: "container.schedules"
         }
     }
 }

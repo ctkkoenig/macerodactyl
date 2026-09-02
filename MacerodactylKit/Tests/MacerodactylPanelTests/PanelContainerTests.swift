@@ -68,6 +68,41 @@ import MacerodactylKit
         }
     }
 
+    @Test func schedulesRequireSchedulesPermission() async throws {
+        // view but NOT schedules → 403 on both read and write.
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            try await client.execute(uri: "/api/containers/bot/schedule", method: .get, headers: headers(token)) { response in
+                #expect(response.status == .forbidden)
+            }
+            try await client.execute(uri: "/api/containers/bot/schedule", method: .post,
+                                     headers: headers(token, csrf: true, json: true),
+                                     body: ByteBuffer(string: #"{"hour":4,"minute":30}"#)) { response in
+                #expect(response.status == .forbidden)
+            }
+        }
+        #expect(harness.service.scheduleCalls.isEmpty) // never reached the service
+    }
+
+    @Test func schedulesWorkWhenGranted() async throws {
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, schedules: true))
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            try await client.execute(uri: "/api/containers/bot/schedule", method: .post,
+                                     headers: headers(token, csrf: true, json: true),
+                                     body: ByteBuffer(string: #"{"hour":4,"minute":30,"weekdays":[1,5]}"#)) { response in
+                #expect(response.status == .ok)
+            }
+            try await client.execute(uri: "/api/containers/bot/schedule", method: .delete,
+                                     headers: headers(token, csrf: true)) { response in
+                #expect(response.status == .ok)
+            }
+        }
+        #expect(harness.service.scheduleCalls.contains { $0.op == "set" && $0.name == "bot" })
+        #expect(harness.service.scheduleCalls.contains { $0.op == "remove" && $0.name == "bot" })
+    }
+
     @Test func filesRequireFilesPermission() async throws {
         let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
         try await harness.app.test(.router) { client in

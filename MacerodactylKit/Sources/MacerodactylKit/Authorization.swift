@@ -1,11 +1,12 @@
 import Foundation
 
-/// The four separately grantable permissions, modeled on Pterodactyl subusers.
+/// The separately grantable permissions, modeled on Pterodactyl subusers.
 public enum ContainerPermission: String, CaseIterable, Sendable, Codable {
     case view
     case power
     case files
     case console
+    case schedules
 }
 
 /// Per-container grant for one user. Keyed by container *name*: compose
@@ -16,12 +17,15 @@ public struct ContainerGrant: Sendable, Equatable, Codable {
     public var power: Bool
     public var files: Bool
     public var console: Bool
+    /// Manage scheduled restarts (create/edit/delete launchd agents) over HTTP.
+    public var schedules: Bool
 
-    public init(view: Bool = false, power: Bool = false, files: Bool = false, console: Bool = false) {
+    public init(view: Bool = false, power: Bool = false, files: Bool = false, console: Bool = false, schedules: Bool = false) {
         self.view = view
         self.power = power
         self.files = files
         self.console = console
+        self.schedules = schedules
     }
 
     public func allows(_ permission: ContainerPermission) -> Bool {
@@ -30,10 +34,11 @@ public struct ContainerGrant: Sendable, Equatable, Codable {
         case .power: power
         case .files: files
         case .console: console
+        case .schedules: schedules
         }
     }
 
-    public var isEmpty: Bool { !view && !power && !files && !console }
+    public var isEmpty: Bool { !view && !power && !files && !console && !schedules }
 }
 
 /// Pure scoping logic — THE security boundary of the web panel. No I/O, no
