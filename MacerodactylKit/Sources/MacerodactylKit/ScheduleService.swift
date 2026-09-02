@@ -37,14 +37,27 @@ public struct RestartSchedule: Sendable, Equatable, Identifiable {
     }
 }
 
+public enum ScheduleOutcome: Sendable, Equatable {
+    case success
+    /// docker ran and reported an error (e.g. daemon down, no such container).
+    case failed
+    /// docker hung and the deadline wrapper had to kill it — a stale Docker
+    /// Desktop socket makes `docker restart` block forever, which would
+    /// otherwise be the silent-failure case. Distinct from `failed`.
+    case timedOut
+}
+
 /// Outcome of the most recent scheduled run, reconstructed from the log files
-/// launchd writes for us. This is what makes failures visible instead of
-/// silent: `docker restart` prints the container name to stdout on success and
-/// its error to stderr on failure, and each stream lands in its own file.
+/// launchd appends to. `docker restart` prints the container name to stdout on
+/// success and its error to stderr on failure; the deadline wrapper prints a
+/// recognizable marker to stderr on timeout. Whichever log was written most
+/// recently reflects the last run, and its final line says how it went.
 public struct ScheduleRunResult: Sendable, Equatable {
     public let date: Date
-    public let success: Bool
+    public let outcome: ScheduleOutcome
     public let message: String
+
+    public var succeeded: Bool { outcome == .success }
 }
 
 public enum ScheduleError: Error, Equatable, Sendable {
@@ -58,6 +71,30 @@ public struct ScheduleService: Sendable {
     public let dockerPath: String
     /// Test seam: launchctl is skipped entirely when false.
     let managesLaunchd: Bool
+
+    /// Hard deadline for a scheduled `docker restart`, in seconds. Comfortably
+    /// above docker's own 10s container-stop grace so a legitimately slow
+    /// restart is never mistaken for a hang.
+    public static let restartDeadlineSeconds = 60
+
+    /// Printed to stderr by the deadline wrapper when it kills a hung docker.
+    public static let timeoutMarker = "macerodactyl-schedule: timed out"
+
+    /// Deadline wrapper run by `/usr/bin/perl`. It forks `docker` and, if the
+    /// child outlives the deadline, sends SIGTERM then SIGKILL — unlike the
+    /// classic `alarm; exec` idiom, which a Go binary like docker ignores
+    /// (docker never registers for SIGALRM, so the timer fires into nothing).
+    /// Exit 124 and the stderr marker distinguish a timeout from docker's own
+    /// non-zero exits. Kept to one line so it embeds cleanly in the plist argv.
+    static let deadlineScript =
+        "my $d=shift; my $p=fork; if($p==0){exec @ARGV or exit 127} my $to=0; "
+        + "$SIG{ALRM}=sub{$to=1; kill 'TERM',$p; my $n=0; "
+        + "while($n++<30 && waitpid($p,1)==0){select(undef,undef,undef,0.1)} "
+        + "kill 'KILL',$p if waitpid($p,1)==0}; "
+        + "alarm $d; waitpid($p,0); my $s=$?; "
+        + "if($to){print STDERR \"" + timeoutMarker
+        + " after ${d}s (docker did not respond; the daemon may be down or the socket is stale)\\n\"; exit 124} "
+        + "exit($s>>8);"
 
     public init(dockerPath: String) throws {
         self.dockerPath = dockerPath
@@ -84,9 +121,17 @@ public struct ScheduleService: Sendable {
     /// There is deliberately no RunAtLoad: absent means false, so loading the
     /// agent at login never runs a restart.
     public func plistDictionary(for schedule: RestartSchedule) -> [String: Any] {
+        // The restart runs under a perl deadline wrapper (see deadlineScript)
+        // so a hung docker can't sit in `state = running` forever. Every path
+        // is absolute — launchd inherits no shell PATH — and nothing passes
+        // through a shell.
+        let programArguments = [
+            "/usr/bin/perl", "-e", Self.deadlineScript, "--",
+            String(Self.restartDeadlineSeconds), dockerPath, "restart", schedule.containerName,
+        ]
         var dict: [String: Any] = [
             "Label": schedule.label,
-            "ProgramArguments": [dockerPath, "restart", schedule.containerName],
+            "ProgramArguments": programArguments,
             "StandardOutPath": logsDirectory.appending(path: "\(schedule.label).out.log").path,
             "StandardErrorPath": logsDirectory.appending(path: "\(schedule.label).err.log").path,
         ]
@@ -179,8 +224,9 @@ public struct ScheduleService: Sendable {
         guard let data = try? Data(contentsOf: url),
               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
               let arguments = plist["ProgramArguments"] as? [String],
-              arguments.count == 3, arguments[1] == "restart" else { return nil }
-        let name = arguments[2]
+              let restartIndex = arguments.firstIndex(of: "restart"),
+              restartIndex + 1 < arguments.count else { return nil }
+        let name = arguments[restartIndex + 1]
         if let interval = plist["StartCalendarInterval"] as? [String: Int] {
             return RestartSchedule(
                 containerName: name,
@@ -200,16 +246,23 @@ public struct ScheduleService: Sendable {
     // MARK: Agent health (stale or missing binary)
 
     /// The docker path baked into an installed agent's plist. The path is
-    /// resolved at write time, so an agent written under Docker Desktop keeps
-    /// /usr/local/bin/docker even after a move to OrbStack — health() makes
-    /// that visible instead of letting the schedule quietly fire into nothing.
+    /// resolved at write time, so an agent keeps the binary it was written
+    /// with even if the Docker provider is later switched or reinstalled —
+    /// health() makes that visible instead of letting the schedule quietly
+    /// fire into nothing.
     public func installedDockerPath(forContainerName name: String) -> String? {
         let schedule = RestartSchedule(containerName: name, hour: 0, minute: 0)
         guard let data = try? Data(contentsOf: plistPath(for: schedule)),
               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let arguments = plist["ProgramArguments"] as? [String],
-              let first = arguments.first else { return nil }
-        return first
+              let arguments = plist["ProgramArguments"] as? [String] else { return nil }
+        return Self.dockerPath(inProgramArguments: arguments)
+    }
+
+    /// The docker binary in a ProgramArguments array — the element right
+    /// before "restart", regardless of any wrapper that precedes it.
+    static func dockerPath(inProgramArguments arguments: [String]) -> String? {
+        guard let restartIndex = arguments.firstIndex(of: "restart"), restartIndex > 0 else { return nil }
+        return arguments[restartIndex - 1]
     }
 
     public enum AgentHealth: Sendable, Equatable {
@@ -218,7 +271,7 @@ public struct ScheduleService: Sendable {
         /// job will fail to spawn (producing no log output at all).
         case binaryMissing(installed: String)
         /// The binary exists but differs from the currently resolved docker —
-        /// e.g. the plist predates a Docker Desktop → OrbStack move.
+        /// e.g. the plist predates a Docker provider switch or reinstall.
         case binaryOutdated(installed: String, current: String)
     }
 
@@ -238,21 +291,27 @@ public struct ScheduleService: Sendable {
     public func lastResult(for schedule: RestartSchedule) -> ScheduleRunResult? {
         let outURL = logsDirectory.appending(path: "\(schedule.label).out.log")
         let errURL = logsDirectory.appending(path: "\(schedule.label).err.log")
+        // launchd appends across runs, so the more recently modified log
+        // reflects the last run, and its final line says how it went. A
+        // stderr final line carrying the wrapper's marker means a timeout;
+        // any other stderr line means docker itself errored.
         let out = logInfo(outURL)
         let err = logInfo(errURL)
+        func fromStderr(_ info: (date: Date, lastLine: String)) -> ScheduleRunResult {
+            let outcome: ScheduleOutcome = info.lastLine.contains(Self.timeoutMarker) ? .timedOut : .failed
+            return ScheduleRunResult(date: info.date, outcome: outcome, message: info.lastLine)
+        }
         switch (out, err) {
         case (nil, nil):
             return nil
         case (let out?, nil):
-            return ScheduleRunResult(date: out.date, success: true, message: out.lastLine)
+            return ScheduleRunResult(date: out.date, outcome: .success, message: out.lastLine)
         case (nil, let err?):
-            return ScheduleRunResult(date: err.date, success: false, message: err.lastLine)
+            return fromStderr(err)
         case (let out?, let err?):
-            // Success writes stdout only; failure writes stderr only — the
-            // newer file tells us how the last run went.
             return err.date > out.date
-                ? ScheduleRunResult(date: err.date, success: false, message: err.lastLine)
-                : ScheduleRunResult(date: out.date, success: true, message: out.lastLine)
+                ? fromStderr(err)
+                : ScheduleRunResult(date: out.date, outcome: .success, message: out.lastLine)
         }
     }
 

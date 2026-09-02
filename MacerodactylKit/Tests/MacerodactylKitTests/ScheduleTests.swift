@@ -23,9 +23,17 @@ import Testing
         let dict = service.plistDictionary(for: RestartSchedule(containerName: "fixture-mc", hour: 4, minute: 30))
 
         // launchd inherits no shell PATH: the argv must carry the fully
-        // resolved binary, and there is no shell anywhere in it.
-        let args = dict["ProgramArguments"] as? [String]
-        #expect(args == ["/fake/resolved/bin/docker", "restart", "fixture-mc"])
+        // resolved binary, wrapped by the perl deadline runner (also an
+        // absolute path). There is no shell anywhere in it.
+        let args = try #require(dict["ProgramArguments"] as? [String])
+        #expect(args.first == "/usr/bin/perl")
+        #expect(!args.contains { $0.contains("/bin/sh") || $0.contains("bash") })
+        // docker + restart + container name appear in order, with the fully
+        // resolved binary right before "restart".
+        let restartIndex = try #require(args.firstIndex(of: "restart"))
+        #expect(args[restartIndex - 1] == "/fake/resolved/bin/docker")
+        #expect(args[restartIndex + 1] == "fixture-mc")
+        #expect(ScheduleService.dockerPath(inProgramArguments: args) == "/fake/resolved/bin/docker")
         #expect(dict["Label"] as? String == "com.macerodactyl.restart.fixture-mc")
         // Restart-only, never a boot starter: no RunAtLoad at all.
         #expect(dict["RunAtLoad"] == nil)
@@ -142,18 +150,46 @@ import Testing
 
         try Data("bot\n".utf8).write(to: out)
         let success = try #require(service.lastResult(for: schedule))
-        #expect(success.success)
+        #expect(success.outcome == .success)
         #expect(success.message == "bot")
 
         Thread.sleep(forTimeInterval: 0.05)
         try Data("Cannot connect to the Docker daemon at unix:///... Is the docker daemon running?\n".utf8).write(to: err)
         let failure = try #require(service.lastResult(for: schedule))
-        #expect(!failure.success)
+        #expect(failure.outcome == .failed)
         #expect(failure.message.contains("Cannot connect to the Docker daemon"))
 
         // A later success flips it back.
         Thread.sleep(forTimeInterval: 0.05)
         try Data("bot\nbot\n".utf8).write(to: out)
-        #expect(service.lastResult(for: schedule)?.success == true)
+        #expect(service.lastResult(for: schedule)?.outcome == .success)
+    }
+
+    @Test func timeoutSurfacesAsDistinctState() throws {
+        let (service, cleanup) = try makeService()
+        defer { cleanup() }
+        let schedule = RestartSchedule(containerName: "fixture-bare", hour: 0, minute: 0)
+        let out = service.logsDirectory.appending(path: "\(schedule.label).out.log")
+        let err = service.logsDirectory.appending(path: "\(schedule.label).err.log")
+
+        // A prior successful run…
+        try Data("fixture-bare\n".utf8).write(to: out)
+        #expect(service.lastResult(for: schedule)?.outcome == .success)
+
+        // …then a hung run: the deadline wrapper appends its marker to stderr.
+        // This is neither a docker daemon error nor silence — it must read as
+        // its own state, not the same as .failed.
+        Thread.sleep(forTimeInterval: 0.05)
+        let markerLine = "\(ScheduleService.timeoutMarker) after 60s (docker did not respond; the daemon may be down or the socket is stale)\n"
+        try Data(markerLine.utf8).write(to: err)
+        let result = try #require(service.lastResult(for: schedule))
+        #expect(result.outcome == .timedOut)
+        #expect(result.outcome != .failed)
+        #expect(result.message.contains("timed out"))
+
+        // A genuine docker error on a later run is still .failed, not .timedOut.
+        Thread.sleep(forTimeInterval: 0.05)
+        try Data("\(markerLine)Error response from daemon: no such container\n".utf8).write(to: err)
+        #expect(service.lastResult(for: schedule)?.outcome == .failed)
     }
 }

@@ -68,14 +68,19 @@ struct ScheduleSection: View {
     private var lastRunLine: some View {
         if let lastResult {
             let stamp = lastResult.date.formatted(date: .abbreviated, time: .shortened)
-            if lastResult.success {
-                Text("Last run \(stamp): ok")
+            switch lastResult.outcome {
+            case .success:
+                Label("Last run \(stamp): ok", systemImage: "checkmark.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else {
-                Text("Last run \(stamp) FAILED: \(lastResult.message)")
+            case .failed:
+                Label("Last run \(stamp) FAILED: \(lastResult.message)", systemImage: "xmark.octagon.fill")
                     .font(.caption)
                     .foregroundStyle(.red)
+            case .timedOut:
+                Label("Last run \(stamp) TIMED OUT — docker didn't respond within \(ScheduleService.restartDeadlineSeconds)s and was stopped. Docker Desktop may be quit (a stale socket makes restart hang).", systemImage: "clock.badge.exclamationmark.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
         } else {
             Text("Hasn't run yet")

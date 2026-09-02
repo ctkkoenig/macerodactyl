@@ -194,7 +194,12 @@ case "schedule-status":
     print("installed docker path: \(service.installedDockerPath(forContainerName: arguments[2]) ?? "?")")
     print("health: \(service.health(forContainerName: arguments[2]).map(String.init(describing:)) ?? "?")")
     if let result = service.lastResult(for: schedule) {
-        print("last run: \(result.date.formatted()) \(result.success ? "OK" : "FAILED") — \(result.message)")
+        let label = switch result.outcome {
+        case .success: "OK"
+        case .failed: "FAILED"
+        case .timedOut: "TIMED OUT"
+        }
+        print("last run: \(result.date.formatted()) \(label) — \(result.message)")
     } else {
         print("last run: never")
     }

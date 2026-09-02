@@ -14,6 +14,12 @@ relax them without asking.
   path: user override setting → `~/.orbstack/bin/docker` → `/opt/homebrew/bin/docker`
   → `/usr/local/bin/docker`. The same applies to generated launchd plists: always
   embed the absolute resolved path.
+- **Docker Desktop is the deployment target** (on every machine this ships to);
+  the expected binary is `/usr/local/bin/docker`. The other candidate paths stay
+  because people cloning this run OrbStack or Homebrew/Colima, but docs and
+  defaults assume Docker Desktop. Nothing may assume a provider-specific socket
+  path or directory layout — all daemon access goes through the CLI, which reads
+  its own `~/.docker` context.
 
 ## Container model
 - Compose stacks are detected via the labels `com.docker.compose.project`,

@@ -2,8 +2,10 @@
 
 Throwaway containers used to exercise Macerodactyl on a development machine.
 They are **not** part of the app and are specific to whatever Mac you run them
-on — the real deployment target is a separate machine running OrbStack. If you
-find these lying around months later, they are safe to delete.
+on. The deployment target is Docker Desktop (expected binary
+`/usr/local/bin/docker`); other providers work through the multi-path binary
+resolution. If you find these lying around months later, they are safe to
+delete.
 
 | Fixture | What | Why |
 | --- | --- | --- |

@@ -232,7 +232,7 @@ struct DaemonDownView: View {
         ContentUnavailableView {
             Label("Docker isn't running", systemImage: "exclamationmark.triangle")
         } description: {
-            Text("Start OrbStack or Docker Desktop, then try again. Macerodactyl never starts the daemon or your containers itself.")
+            Text("Start Docker Desktop (or whichever Docker provider you use), then try again. Macerodactyl never starts the daemon or your containers itself.")
         } actions: {
             Button("Check again") {
                 Task { await store.refresh() }

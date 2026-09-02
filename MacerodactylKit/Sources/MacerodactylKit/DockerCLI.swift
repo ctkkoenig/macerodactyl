@@ -1,7 +1,8 @@
 import Foundation
 
 public enum DockerError: Error, Equatable, Sendable {
-    /// The docker CLI exists but cannot reach the daemon (OrbStack/Docker Desktop not running).
+    /// The docker CLI exists but cannot reach the daemon (Docker Desktop, or
+    /// whichever provider is installed, isn't running).
     case daemonUnavailable
     case timeout
     case nonZeroExit(code: Int32, stderr: String)
