@@ -25,12 +25,14 @@ public struct PanelServerConfig: Sendable, Equatable {
 /// handling lives here.
 public actor PanelServer {
     private let store: PanelDataStore
+    private let containers: ContainerService
     private let rateLimiter = LoginRateLimiter()
     private var runTask: Task<Void, Never>?
     private(set) public var isRunning = false
 
-    public init(store: PanelDataStore) {
+    public init(store: PanelDataStore, containers: ContainerService) {
         self.store = store
+        self.containers = containers
     }
 
     /// Builds the router with the full middleware stack and routes. Exposed so
@@ -42,7 +44,7 @@ public actor PanelServer {
         // requests. Both are global so no route can forget them.
         router.add(middleware: SessionAuthenticator(store: store))
         router.add(middleware: CSRFMiddleware())
-        PanelRoutes(store: store, rateLimiter: rateLimiter).register(on: router)
+        PanelRoutes(store: store, rateLimiter: rateLimiter, containers: containers).register(on: router)
         return router
     }
 

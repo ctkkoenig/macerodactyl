@@ -13,26 +13,40 @@ import MacerodactylKit
     struct Harness {
         let store: PanelDataStore
         let app: Application<RouterResponder<PanelRequestContext>>
+        let service: FakeContainerService
+        let botStackRoot: URL
         let admin: PanelUser
         let scoped: PanelUser
         let adminPassword = "admin-pw-123456"
         let scopedPassword = "scoped-pw-123456"
     }
 
-    func makeHarness() async throws -> Harness {
+    func makeHarness(scopedGrant: ContainerGrant = ContainerGrant(view: true, power: true)) async throws -> Harness {
         let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let store = try PanelDataStore(databasePath: dir.appending(path: "t.sqlite").path)
         let accounts = AccountManager(store: store)
         let admin = try await accounts.createUser(username: "admin", password: "admin-pw-123456", isAdmin: true)
         let scoped = try await accounts.createUser(username: "scoped", password: "scoped-pw-123456", isAdmin: false)
-        // scoped may view+power "bot", nothing about "secret".
-        try accounts.setGrant(userID: scoped.id, containerName: "bot",
-                             grant: ContainerGrant(view: true, power: true), filesGrantable: true)
-        let server = PanelServer(store: store)
-        let router = await server.buildRouter()
-        let app = Application(router: router)
-        return Harness(store: store, app: app, admin: admin, scoped: scoped)
+        try accounts.setGrant(userID: scoped.id, containerName: "bot", grant: scopedGrant, filesGrantable: true)
+
+        // "bot" has a real stack folder on disk so file routes exercise the real
+        // FileService + confinement; "secret" exists but scoped can't view it.
+        let stacks = dir.appending(path: "stacks")
+        let botRoot = stacks.appending(path: "bot")
+        try FileManager.default.createDirectory(at: botRoot, withIntermediateDirectories: true)
+        try Data("services: {}\n".utf8).write(to: botRoot.appending(path: "docker-compose.yml"))
+        let secretDir = dir.appending(path: "secret-data")
+        try FileManager.default.createDirectory(at: secretDir, withIntermediateDirectories: true)
+        try Data("TOP SECRET".utf8).write(to: secretDir.appending(path: "creds.txt"))
+
+        let service = FakeContainerService(fixtures: [
+            "bot": .init(container: .fixture(name: "bot", workingDir: botRoot.path), stackRoot: botRoot),
+            "secret": .init(container: .fixture(name: "secret", workingDir: nil), stackRoot: nil),
+        ])
+        let server = PanelServer(store: store, containers: service)
+        let app = Application(router: server.buildRouter())
+        return Harness(store: store, app: app, service: service, botStackRoot: botRoot, admin: admin, scoped: scoped)
     }
 
     /// Logs in and returns the session cookie value.
@@ -113,9 +127,9 @@ import MacerodactylKit
             let token = try #require(cookie)
             try await client.execute(uri: "/api/containers", method: .get, headers: cookieHeader(token)) { response in
                 #expect(response.status == .ok)
-                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
-                #expect(json["scope"] as? String == "granted")
-                #expect(json["containers"] as? [String] == ["bot"])
+                let list = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [[String: Any]]
+                // Only "bot" — "secret" exists but is never revealed.
+                #expect(list.map { $0["name"] as? String } == ["bot"])
             }
         }
     }
@@ -129,8 +143,9 @@ import MacerodactylKit
             try await client.execute(uri: "/api/containers/bot", method: .get, headers: cookieHeader(token)) { response in
                 #expect(response.status == .ok)
                 let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
-                #expect(json["power"] as? Bool == true)
-                #expect(json["files"] as? Bool == false)
+                let perms = json["permissions"] as! [String: Any]
+                #expect(perms["power"] as? Bool == true)
+                #expect(perms["files"] as? Bool == false)
             }
             // Ungranted container → 404 (existence not revealed), never 403.
             try await client.execute(uri: "/api/containers/secret", method: .get, headers: cookieHeader(token)) { response in
@@ -147,12 +162,13 @@ import MacerodactylKit
         try await harness.app.test(.router) { client in
             let (_, cookie) = try await login(client, username: "admin", password: harness.adminPassword)
             let token = try #require(cookie)
-            try await client.execute(uri: "/api/containers/anything", method: .get, headers: cookieHeader(token)) { response in
-                #expect(response.status == .ok) // admin can view any container
+            // Admin can view a container no grant mentions.
+            try await client.execute(uri: "/api/containers/secret", method: .get, headers: cookieHeader(token)) { response in
+                #expect(response.status == .ok)
             }
             try await client.execute(uri: "/api/containers", method: .get, headers: cookieHeader(token)) { response in
-                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
-                #expect(json["scope"] as? String == "all")
+                let list = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [[String: Any]]
+                #expect(Set(list.compactMap { $0["name"] as? String }) == ["bot", "secret"])
             }
         }
     }

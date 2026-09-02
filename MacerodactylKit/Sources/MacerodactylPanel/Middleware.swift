@@ -57,29 +57,59 @@ struct RequireAuth: RouterMiddleware {
 }
 
 /// Container-level scoping, applied to the whole container route group so every
-/// current and future container route inherits it rather than each re-checking.
-/// When a route addresses a specific container (`:name`), the caller must have
-/// at least view permission — and a user who lacks it gets **404, not 403**, so
-/// the existence of containers they aren't granted is never revealed.
+/// current and future container route inherits it — no route re-implements its
+/// own check. The permission a route requires is derived here from its path and
+/// method, in one place.
+///
+/// Two distinct outcomes:
+/// - **No view permission → 404.** The existence of a container the caller
+///   isn't granted is never revealed; this response is identical to the one for
+///   a container that genuinely doesn't exist (see PanelRoutes' not-found).
+/// - **Has view but lacks the action's permission → 403.** The caller already
+///   knows the container exists (they can view it), so power/files/console
+///   being forbidden is an honest 403, not a hidden 404.
 struct ContainerScopeMiddleware: RouterMiddleware {
     typealias Context = PanelRequestContext
     let store: PanelDataStore
 
     func handle(_ request: Request, context: Context, next: (Request, Context) async throws -> Response) async throws -> Response {
         let user = try context.requireIdentity()
-        if let name = context.parameters.get("name") {
-            let engine = try store.authorizationEngine(for: user)
-            guard engine.canView(containerNamed: name) else {
-                // Blocked attempts are audited too — a denied access is an
-                // action. The response is 404 so existence isn't revealed to
-                // the caller, but the admin-only audit log records it.
-                try? store.recordAudit(
-                    username: user.username, action: "container.view",
-                    containerName: name, outcome: "denied", sourceIP: context.clientIP
-                )
-                throw HTTPError(.notFound)
-            }
+        guard let name = context.parameters.get("name") else {
+            return try await next(request, context) // list route: no container to scope
+        }
+        let engine = try store.authorizationEngine(for: user)
+        let required = Self.requiredPermission(path: request.uri.path)
+
+        // Existence gate first: without view, the container is invisible → 404.
+        guard engine.canView(containerNamed: name) else {
+            try? store.recordAudit(username: user.username, action: auditAction(for: required),
+                                  containerName: name, outcome: "denied", sourceIP: context.clientIP)
+            throw HTTPError(.notFound)
+        }
+        // Action gate: viewable, but this specific action may still be forbidden.
+        if required != .view, !engine.can(required, containerNamed: name) {
+            try? store.recordAudit(username: user.username, action: auditAction(for: required),
+                                  containerName: name, outcome: "denied", sourceIP: context.clientIP)
+            throw HTTPError(.forbidden)
         }
         return try await next(request, context)
+    }
+
+    /// Maps a container route path to the permission it requires — the single
+    /// place this mapping lives.
+    static func requiredPermission(path: String) -> ContainerPermission {
+        if path.contains("/files") { return .files }
+        if path.hasSuffix("/console") { return .console }
+        if path.hasSuffix("/power") { return .power }
+        return .view // detail, logs
+    }
+
+    private func auditAction(for permission: ContainerPermission) -> String {
+        switch permission {
+        case .view: "container.view"
+        case .power: "container.power"
+        case .files: "container.files"
+        case .console: "container.console"
+        }
     }
 }

@@ -14,9 +14,9 @@ public final class PanelController {
     /// Set once when a first-run admin is created, for the UI to display.
     public private(set) var firstAdminPassword: String?
 
-    public init(store: PanelDataStore) {
+    public init(store: PanelDataStore, containers: ContainerService) {
         self.store = store
-        self.server = PanelServer(store: store)
+        self.server = PanelServer(store: store, containers: containers)
     }
 
     public func applySettings() {

@@ -5,7 +5,13 @@ import MacerodactylPanel
 @main
 struct MacerodactylApp: App {
     @State private var store = ContainerStore()
-    @State private var panel = AppPanel()
+    @State private var panel: AppPanel
+
+    init() {
+        let store = ContainerStore()
+        _store = State(initialValue: store)
+        _panel = State(initialValue: AppPanel(containerStore: store))
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -54,10 +60,10 @@ final class AppPanel {
     let store: PanelDataStore?
     let controller: PanelController?
 
-    init() {
+    init(containerStore: ContainerStore) {
         if let path = try? AppPaths.databasePath(), let store = try? PanelDataStore(databasePath: path) {
             self.store = store
-            self.controller = PanelController(store: store)
+            self.controller = PanelController(store: store, containers: LiveContainerService(store: containerStore))
         } else {
             self.store = nil
             self.controller = nil

@@ -7,20 +7,28 @@ import NIOCore
 struct PanelRoutes {
     let store: PanelDataStore
     let rateLimiter: LoginRateLimiter
+    let containers: ContainerService
 
     func register(on router: Router<PanelRequestContext>) {
         router.get("/", use: root)
         router.get("login", use: loginPage)
         router.post("login", use: login)
         router.post("logout", use: logout)
-        router.get("me", use: identityPage)
+        router.get("me", use: appPage)
 
         let api = router.group("api").add(middleware: RequireAuth())
         api.get("me", use: apiMe)
 
-        let containers = api.group("containers").add(middleware: ContainerScopeMiddleware(store: store))
-        containers.get(use: apiContainers)
-        containers.get(":name", use: apiContainerDetail)
+        // Every container route inherits the scoping middleware; none re-checks.
+        let scoped = api.group("containers").add(middleware: ContainerScopeMiddleware(store: store))
+        scoped.get(use: apiContainers)
+        scoped.get(":name", use: apiContainerDetail)
+        scoped.post(":name/power", use: apiPower)
+        scoped.get(":name/logs", use: apiLogs)
+        scoped.post(":name/console", use: apiConsole)
+        scoped.get(":name/files", use: apiFilesList)
+        scoped.get(":name/files/content", use: apiFileRead)
+        scoped.put(":name/files/content", use: apiFileWrite)
     }
 
     // MARK: HTML pages
@@ -34,10 +42,9 @@ struct PanelRoutes {
         return html(PanelHTML.login())
     }
 
-    @Sendable func identityPage(_ request: Request, context: PanelRequestContext) async throws -> Response {
-        guard let user = context.identity else { return redirect("/login") }
-        let grants = try store.grants(forUserID: user.id)
-        return html(PanelHTML.identity(user: user, grants: grants))
+    @Sendable func appPage(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        guard context.identity != nil else { return redirect("/login") }
+        return html(PanelHTML.app())
     }
 
     // MARK: Auth
@@ -114,45 +121,235 @@ struct PanelRoutes {
         return encode(dto)
     }
 
-    struct ContainersResponse: Encodable {
-        let scope: String        // "all" for admins, "granted" for scoped users
-        let containers: [String]
+    struct ContainerSummary: Encodable {
+        let name, image, status, state: String
+        let running: Bool
+        let health: String?
+        let stack: String?
     }
 
     @Sendable func apiContainers(_ request: Request, context: PanelRequestContext) async throws -> Response {
         let user = try context.requireIdentity()
-        if user.isAdmin {
-            // Admins can see everything; the live container list arrives with
-            // container features next phase, so nothing is enumerated here yet.
-            return encode(ContainersResponse(scope: "all", containers: []))
+        let engine = try store.authorizationEngine(for: user)
+        // The list is filtered to what the caller may view — nothing else.
+        let visible = engine.visible(await containers.allContainers())
+        let summaries = visible.map { container in
+            ContainerSummary(
+                name: container.name, image: container.image, status: container.status,
+                state: container.state.rawValue, running: container.isRunning,
+                health: container.health?.rawValue, stack: container.composeProject
+            )
         }
-        // A scoped user sees only the containers they can view — nothing else.
-        let names = try store.grants(forUserID: user.id)
-            .filter { $0.value.view }.keys.sorted()
-        return encode(ContainersResponse(scope: "granted", containers: names))
+        return encode(summaries)
     }
 
     struct ContainerDetail: Encodable {
-        let name: String
-        let view, power, files, console: Bool
+        let name, image, status, state, ports: String
+        let running: Bool
+        let health: String?
+        let stack: String?
+        let permissions: Permissions
+        let filesAvailable: Bool
+        struct Permissions: Encodable { let view, power, files, console: Bool }
     }
 
     @Sendable func apiContainerDetail(_ request: Request, context: PanelRequestContext) async throws -> Response {
         // The scope middleware already 404'd anyone without view permission.
         let user = try context.requireIdentity()
         let name = try context.parameters.require("name")
+        guard let container = await containers.container(named: name) else { throw notFound() }
         let engine = try store.authorizationEngine(for: user)
         audit(user: user.username, action: "container.view", container: name, outcome: "ok", ip: context.clientIP)
         return encode(ContainerDetail(
-            name: name,
-            view: engine.can(.view, containerNamed: name),
-            power: engine.can(.power, containerNamed: name),
-            files: engine.can(.files, containerNamed: name),
-            console: engine.can(.console, containerNamed: name)
+            name: container.name, image: container.image, status: container.status,
+            state: container.state.rawValue, ports: container.ports, running: container.isRunning,
+            health: container.health?.rawValue, stack: container.composeProject,
+            permissions: .init(
+                view: engine.can(.view, containerNamed: name), power: engine.can(.power, containerNamed: name),
+                files: engine.can(.files, containerNamed: name), console: engine.can(.console, containerNamed: name)
+            ),
+            filesAvailable: await containers.fileService(containerName: name) != nil
         ))
     }
 
+    // MARK: Power
+
+    struct PowerBody: Decodable { let action: String }
+
+    @Sendable func apiPower(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let body = try? await request.decode(as: PowerBody.self, context: context),
+              let action = ContainerStore.PowerAction(rawValue: body.action) else {
+            return json(["error": "action must be start, stop, or restart"], status: .badRequest)
+        }
+        guard await containers.container(named: name) != nil else { throw notFound() }
+        do {
+            try await containers.power(action, containerName: name)
+            audit(user: user.username, action: "container.power", container: name, outcome: "ok",
+                  ip: context.clientIP, detail: action.rawValue)
+            return json(["ok": true])
+        } catch {
+            audit(user: user.username, action: "container.power", container: name, outcome: "error",
+                  ip: context.clientIP, detail: "\(action.rawValue): \(error)")
+            return json(["error": "\(error)"], status: .internalServerError)
+        }
+    }
+
+    // MARK: Logs (SSE)
+
+    @Sendable func apiLogs(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let stream = await containers.logLines(containerName: name) else { throw notFound() }
+        audit(user: user.username, action: "container.logs", container: name, outcome: "ok", ip: context.clientIP)
+
+        // Server-Sent Events with a heartbeat. A log stream can be idle for a
+        // long time (a container that isn't logging), during which the write
+        // loop would be parked awaiting the next line and never notice the
+        // client left. The heartbeat forces a write every few seconds; the
+        // first write after a disconnect (phone drops wifi / backgrounds the
+        // browser) throws, which drops the merged stream, cancels the docker
+        // log task, and fires its onTermination — killing the `docker logs -f`
+        // child. So no process leaks per abandoned connection.
+        let body = ResponseBody(contentLength: nil) { writer in
+            let events = AsyncThrowingStream<ByteBuffer, Error> { continuation in
+                let logTask = Task {
+                    do {
+                        for try await line in stream {
+                            let event = "data: \(line.replacingOccurrences(of: "\n", with: "\ndata: "))\n\n"
+                            continuation.yield(ByteBuffer(string: event))
+                        }
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                }
+                let heartbeatTask = Task {
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .seconds(10))
+                        continuation.yield(ByteBuffer(string: ": ping\n\n"))
+                    }
+                }
+                continuation.onTermination = { _ in
+                    logTask.cancel()      // drops the docker stream → process terminated
+                    heartbeatTask.cancel()
+                }
+            }
+            do {
+                for try await event in events {
+                    try await writer.write(event)
+                }
+            } catch {
+                // Client gone or stream ended.
+            }
+            try? await writer.finish(nil)
+        }
+        return Response(status: .ok, headers: [
+            .contentType: "text/event-stream",
+            .cacheControl: "no-cache",
+            .connection: "keep-alive",
+        ], body: body)
+    }
+
+    // MARK: Console
+
+    struct ConsoleBody: Decodable { let command: String }
+
+    @Sendable func apiConsole(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let body = try? await request.decode(as: ConsoleBody.self, context: context) else {
+            return json(["error": "command required"], status: .badRequest)
+        }
+        guard let entry = await containers.runConsole(containerName: name, command: body.command) else {
+            throw notFound()
+        }
+        audit(user: user.username, action: "container.console", container: name,
+              outcome: entry.isError ? "error" : "ok", ip: context.clientIP, detail: body.command)
+        return encode(ConsoleResult(command: entry.command, output: entry.output, isError: entry.isError))
+    }
+    struct ConsoleResult: Encodable { let command, output: String; let isError: Bool }
+
+    // MARK: Files
+
+    struct FileEntryDTO: Encodable { let name, path: String; let isDirectory: Bool; let size: Int }
+
+    @Sendable func apiFilesList(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let (name, service) = try await fileService(context)
+        let path = request.uri.queryParameters["path"].map(String.init) ?? ""
+        do {
+            let entries = try service.list(path).map {
+                FileEntryDTO(name: $0.name, path: $0.relativePath, isDirectory: $0.isDirectory, size: $0.sizeBytes)
+            }
+            return encode(entries)
+        } catch {
+            return fileError(error, user: try context.requireIdentity().username, container: name, ip: context.clientIP)
+        }
+    }
+
+    @Sendable func apiFileRead(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let (name, service) = try await fileService(context)
+        guard let path = request.uri.queryParameters["path"].map(String.init) else {
+            return json(["error": "path required"], status: .badRequest)
+        }
+        do {
+            let content = try service.read(path)
+            audit(user: try context.requireIdentity().username, action: "container.files", container: name,
+                  outcome: "ok", ip: context.clientIP, detail: "read \(path)")
+            return encode(FileContentDTO(path: path, text: content.text, lineEnding: content.lineEnding.rawValue))
+        } catch {
+            return fileError(error, user: try context.requireIdentity().username, container: name, ip: context.clientIP, detail: "read \(path)")
+        }
+    }
+    struct FileContentDTO: Encodable { let path, text, lineEnding: String }
+
+    struct FileWriteBody: Decodable { let text: String; let lineEnding: String? }
+
+    @Sendable func apiFileWrite(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let (name, service) = try await fileService(context)
+        guard let path = request.uri.queryParameters["path"].map(String.init),
+              let body = try? await request.decode(as: FileWriteBody.self, context: context) else {
+            return json(["error": "path and text required"], status: .badRequest)
+        }
+        let ending = LineEnding(rawValue: body.lineEnding ?? "lf") ?? .lf
+        do {
+            try service.write(path, text: body.text, lineEnding: ending)
+            audit(user: try context.requireIdentity().username, action: "container.files", container: name,
+                  outcome: "ok", ip: context.clientIP, detail: "write \(path)")
+            return json(["ok": true])
+        } catch {
+            return fileError(error, user: try context.requireIdentity().username, container: name, ip: context.clientIP, detail: "write \(path)")
+        }
+    }
+
+    /// Resolves the FileService for the addressed container, or 404 if it has no
+    /// stack folder — same rule as the native app (files unavailable, not a
+    /// broken route). The scope middleware has already enforced the files perm.
+    private func fileService(_ context: PanelRequestContext) async throws -> (name: String, service: FileService) {
+        let name = try context.parameters.require("name")
+        guard let service = await containers.fileService(containerName: name) else { throw notFound() }
+        return (name, service)
+    }
+
+    private func fileError(_ error: Error, user: String, container: String, ip: String, detail: String? = nil) -> Response {
+        try? store.recordAudit(username: user, action: "container.files", containerName: container,
+                              outcome: "denied", sourceIP: ip, detail: detail)
+        let status: HTTPResponse.Status = switch error {
+        case FileServiceError.escapesRoot, FileServiceError.invalidPath: .forbidden
+        case FileServiceError.notFound: .notFound
+        case FileServiceError.tooLarge, FileServiceError.binaryFile: .unprocessableContent
+        default: .badRequest
+        }
+        return json(["error": FileServiceMessage.describe(error)], status: status)
+    }
+
     // MARK: helpers
+
+    /// A bare 404 with no body — identical whether it comes from the scope
+    /// middleware (ungranted) or a handler (genuinely nonexistent), so the two
+    /// cases are indistinguishable to the caller.
+    private func notFound() -> HTTPError { HTTPError(.notFound) }
 
     private func audit(user: String, action: String, container: String? = nil, outcome: String, ip: String, detail: String? = nil) {
         try? store.recordAudit(username: user, action: action, containerName: container,
