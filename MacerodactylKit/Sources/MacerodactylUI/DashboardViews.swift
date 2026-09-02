@@ -30,8 +30,14 @@ public struct DashboardRootView: View {
         }
         .frame(minWidth: 820, minHeight: 560)
         .task {
-            store.startPolling()
-            await store.refreshAdvisories()
+            // Under the UI smoke test, stay idle so XCUIApplication.launch() can
+            // settle — a single non-polling refresh, no timer.
+            if AppSettings.isUITesting {
+                await store.refresh()
+            } else {
+                store.startPolling()
+                await store.refreshAdvisories()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .macerodactylSettingsChanged)) { _ in
             store.resolveBinary()

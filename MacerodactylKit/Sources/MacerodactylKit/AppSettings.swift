@@ -13,6 +13,13 @@ public enum AppSettings {
     public static let defaultRefreshInterval: TimeInterval = 3
     public static let defaultPanelPort = 27180
 
+    /// True when launched by the XCUITest smoke test (via the `-uitest` argument).
+    /// The app then skips its continuous docker polling and the single-instance
+    /// guard, so `XCUIApplication.launch()` can reach an idle, testable state.
+    public static var isUITesting: Bool {
+        ProcessInfo.processInfo.arguments.contains("-uitest")
+    }
+
     public static var dockerPathOverride: String? {
         get { UserDefaults.standard.string(forKey: dockerPathOverrideKey) }
         set { UserDefaults.standard.set(newValue, forKey: dockerPathOverrideKey) }

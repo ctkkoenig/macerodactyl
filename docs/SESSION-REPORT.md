@@ -68,7 +68,10 @@ blocked) with `docs/ADVERSARIAL.md`, optional TOTP 2FA + session
 listing/revocation (RFC-vector-tested, live-verified UI), and a ready-to-wire
 XCUITest smoke test.
 
-## The one documented blocker
+## The one documented blocker — now RESOLVED
+
+> Update: verified in an interactive logged-in session — `macerodactyld` installs under launchd, launches (state `S`, not hung pre-`main`), and serves `/healthz` (`docker: ready`). The earlier hang was specific to the headless/asleep session. The test agent was uninstalled afterward; the real `panel.sqlite` was untouched.
+
 
 `macerodactyld` under **launchd auto-start** could not be verified in this
 session: NIO-linked binaries hang pre-`main` in the machine's headless launchd

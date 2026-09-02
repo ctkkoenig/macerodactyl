@@ -7,20 +7,43 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0D177A32AC926F9D601A7257 /* MacerodactylUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2A9EB90FF2442B23425CC61 /* MacerodactylUITests.swift */; };
 		A10000000000000000000003 /* MacerodactylApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000001 /* MacerodactylApp.swift */; };
 		A10000000000000000000004 /* MacerodactylKit in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000000E /* MacerodactylKit */; };
 		A10000000000000000000016 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000015 /* Assets.xcassets */; };
 		A10000000000000000000018 /* MacerodactylPanel in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000017 /* MacerodactylPanel */; };
 		A1000000000000000000001A /* MacerodactylUI in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000019 /* MacerodactylUI */; };
+		E32A68DA9AD5F7752CBE1453 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 285D7434C21B7F4BEB8D2829 /* Cocoa.framework */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		2DFE1187619DFB9AAD3EC113 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A1000000000000000000000C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A1000000000000000000000B;
+			remoteInfo = Macerodactyl;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		285D7434C21B7F4BEB8D2829 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		A10000000000000000000001 /* MacerodactylApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacerodactylApp.swift; sourceTree = "<group>"; };
 		A10000000000000000000002 /* Macerodactyl.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Macerodactyl.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000015 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C2A9EB90FF2442B23425CC61 /* MacerodactylUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MacerodactylUITests.swift; sourceTree = "<group>"; };
+		E1D9605E4C5E56ABAC9F4E5E /* MacerodactylUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MacerodactylUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		9DC5ADAB2BE339964B1BE7A7 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E32A68DA9AD5F7752CBE1453 /* Cocoa.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A10000000000000000000009 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -34,11 +57,29 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		01C1735C5C8354A46D8F4911 /* OS X */ = {
+			isa = PBXGroup;
+			children = (
+				285D7434C21B7F4BEB8D2829 /* Cocoa.framework */,
+			);
+			name = "OS X";
+			sourceTree = "<group>";
+		};
+		9C289A61A3CB9B77C4030CA0 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				01C1735C5C8354A46D8F4911 /* OS X */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		A10000000000000000000005 = {
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000006 /* App */,
 				A10000000000000000000007 /* Products */,
+				9C289A61A3CB9B77C4030CA0 /* Frameworks */,
+				AEC0294E0ED8459E65493484 /* UITests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -55,13 +96,41 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000002 /* Macerodactyl.app */,
+				E1D9605E4C5E56ABAC9F4E5E /* MacerodactylUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
+		AEC0294E0ED8459E65493484 /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				C2A9EB90FF2442B23425CC61 /* MacerodactylUITests.swift */,
+			);
+			name = UITests;
+			path = UITests;
+			sourceTree = SOURCE_ROOT;
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		4F4A30B5C91E3D2FAD7EA92C /* MacerodactylUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 89B97A74B886E162A93EABB7 /* Build configuration list for PBXNativeTarget "MacerodactylUITests" */;
+			buildPhases = (
+				4D0747FCA5228B756B603B0A /* Sources */,
+				9DC5ADAB2BE339964B1BE7A7 /* Frameworks */,
+				585100BEDF9A5E5D71927994 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				001C2A4063AF621866C1E87E /* PBXTargetDependency */,
+			);
+			name = MacerodactylUITests;
+			productName = MacerodactylUITests;
+			productReference = E1D9605E4C5E56ABAC9F4E5E /* MacerodactylUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		A1000000000000000000000B /* Macerodactyl */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A10000000000000000000010 /* Build configuration list for PBXNativeTarget "Macerodactyl" */;
@@ -116,11 +185,19 @@
 			projectRoot = "";
 			targets = (
 				A1000000000000000000000B /* Macerodactyl */,
+				4F4A30B5C91E3D2FAD7EA92C /* MacerodactylUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		585100BEDF9A5E5D71927994 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A1000000000000000000000A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -132,6 +209,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		4D0747FCA5228B756B603B0A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0D177A32AC926F9D601A7257 /* MacerodactylUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A10000000000000000000008 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -142,7 +227,31 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		001C2A4063AF621866C1E87E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = Macerodactyl;
+			target = A1000000000000000000000B /* Macerodactyl */;
+			targetProxy = 2DFE1187619DFB9AAD3EC113 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		61D33831978F6D5EA02787E7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.macerodactyl.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = Macerodactyl;
+			};
+			name = Release;
+		};
 		A10000000000000000000011 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -228,9 +337,33 @@
 			};
 			name = Release;
 		};
+		C0D8BEB79DDB1392A2EF9B49 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.macerodactyl.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = Macerodactyl;
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		89B97A74B886E162A93EABB7 /* Build configuration list for PBXNativeTarget "MacerodactylUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				61D33831978F6D5EA02787E7 /* Release */,
+				C0D8BEB79DDB1392A2EF9B49 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		A1000000000000000000000F /* Build configuration list for PBXProject "Macerodactyl" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

@@ -61,6 +61,8 @@ struct MacerodactylApp: App {
 /// it to the front and quit ourselves, so the app can never pile up.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // The UI smoke test launches its own copy; don't defer to another instance.
+        if AppSettings.isUITesting { return }
         let current = NSRunningApplication.current
         let bundleID = current.bundleIdentifier ?? "com.macerodactyl.app"
         let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
