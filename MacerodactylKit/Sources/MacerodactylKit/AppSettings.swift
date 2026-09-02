@@ -24,12 +24,51 @@ public enum AppSettings {
     }
 
     /// Root under which stack folders (compose file + bind-mounted data) live.
+    /// Defaults to ~/stacks; user-overridable, tilde-expanded.
     public static var stacksRoot: URL {
-        if let path = UserDefaults.standard.string(forKey: stacksRootKey), !path.isEmpty {
-            return URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        get {
+            if let path = UserDefaults.standard.string(forKey: stacksRootKey), !path.isEmpty {
+                return URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            }
+            return defaultStacksRoot
         }
-        return FileManager.default.homeDirectoryForCurrentUser.appending(path: "stacks")
+        set {
+            UserDefaults.standard.set(newValue.path, forKey: stacksRootKey)
+            NotificationCenter.default.post(name: .macerodactylSettingsChanged, object: nil)
+        }
     }
+
+    public static var defaultStacksRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appending(path: "stacks")
+    }
+
+    /// Whether the configured stacks root currently exists as a directory.
+    public static func stacksRootExists() -> Bool {
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: stacksRoot.path, isDirectory: &isDir) && isDir.boolValue
+    }
+
+    /// Creates the stacks root if missing. Returns the URL on success.
+    @discardableResult
+    public static func createStacksRoot() throws -> URL {
+        try FileManager.default.createDirectory(at: stacksRoot, withIntermediateDirectories: true)
+        return stacksRoot
+    }
+
+    public static func setDockerPathOverride(_ path: String?) {
+        UserDefaults.standard.set(path, forKey: dockerPathOverrideKey)
+        NotificationCenter.default.post(name: .macerodactylSettingsChanged, object: nil)
+    }
+
+    public static func setRefreshInterval(_ interval: TimeInterval) {
+        UserDefaults.standard.set(interval, forKey: refreshIntervalKey)
+        NotificationCenter.default.post(name: .macerodactylSettingsChanged, object: nil)
+    }
+}
+
+public extension Notification.Name {
+    /// Posted when a setting changes so live views re-read without a restart.
+    static let macerodactylSettingsChanged = Notification.Name("macerodactylSettingsChanged")
 }
 
 public enum AppPaths {

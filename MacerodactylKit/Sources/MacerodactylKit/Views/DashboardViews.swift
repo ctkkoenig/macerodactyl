@@ -2,10 +2,12 @@ import SwiftUI
 
 /// Root of the native UI. Owns the store; the app target just instantiates this.
 public struct DashboardRootView: View {
-    @State private var store = ContainerStore()
+    @State private var store: ContainerStore
     @State private var selectedContainerID: String?
 
-    public init() {}
+    public init(store: ContainerStore = ContainerStore()) {
+        _store = State(initialValue: store)
+    }
 
     public var body: some View {
         Group {
@@ -19,6 +21,14 @@ public struct DashboardRootView: View {
         .frame(minWidth: 760, minHeight: 460)
         .task {
             store.startPolling()
+            await store.refreshAdvisories()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .macerodactylSettingsChanged)) { _ in
+            store.resolveBinary()
+            Task {
+                await store.refresh()
+                store.startPolling(interval: AppSettings.refreshInterval)
+            }
         }
     }
 
@@ -31,6 +41,8 @@ public struct DashboardRootView: View {
                 ContainerDetailView(store: store, container: container)
             } else if store.availability == .daemonDown {
                 DaemonDownView(store: store)
+            } else if !store.advisories.isEmpty {
+                AdvisoryListView(advisories: store.advisories)
             } else {
                 ContentUnavailableView(
                     "Select a container",
@@ -274,6 +286,50 @@ struct DockerBinaryMissingView: View {
         panel.showsHiddenFiles = true
         if panel.runModal() == .OK, let url = panel.url {
             overridePath = url.path
+        }
+    }
+}
+
+/// Renders cold-start advisories so an unusual environment explains itself.
+struct AdvisoryListView: View {
+    let advisories: [StartupAdvisory]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(advisories) { advisory in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: icon(advisory.severity))
+                            .foregroundStyle(color(advisory.severity))
+                            .font(.title3)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(advisory.title).font(.headline)
+                            Text(advisory.detail).foregroundStyle(.secondary)
+                            Text(advisory.remedy).font(.callout)
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(color(advisory.severity).opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                }
+            }
+            .padding(20)
+        }
+    }
+
+    private func icon(_ severity: StartupAdvisory.Severity) -> String {
+        switch severity {
+        case .blocking: "exclamationmark.octagon.fill"
+        case .degraded: "exclamationmark.triangle.fill"
+        case .info: "info.circle.fill"
+        }
+    }
+
+    private func color(_ severity: StartupAdvisory.Severity) -> Color {
+        switch severity {
+        case .blocking: .red
+        case .degraded: .orange
+        case .info: .blue
         }
     }
 }

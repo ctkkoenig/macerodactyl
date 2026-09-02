@@ -210,6 +210,44 @@ case "schedule-remove":
     try service.remove(containerName: arguments[2])
     print("removed schedule for \(arguments[2])")
 
+case "diagnose":
+    // Real-machine environment snapshot + advisories.
+    let cli = DockerCLI(binary: binary)
+    let daemon: DockerAvailability
+    let containers: Int
+    do {
+        let output = try await cli.run(["ps", "-a", "--no-trunc", "--format", "{{json .}}"], timeout: .seconds(15))
+        daemon = .ready
+        containers = DockerPSParser.group(DockerPSParser.parse(output)).all.count
+    } catch DockerError.daemonUnavailable {
+        daemon = .daemonDown; containers = 0
+    } catch {
+        daemon = .daemonDown; containers = 0
+    }
+    let pluginWorks = daemon == .ready ? await cli.composePluginWorks() : false
+    let composeAvailable = daemon == .ready
+        ? (ComposeCommand.detect(dockerBinary: binary, pluginWorks: { _ in pluginWorks }) != nil)
+        : false
+    let snapshot = EnvironmentSnapshot(
+        dockerResolved: true, daemon: daemon,
+        composeAvailable: composeAvailable,
+        perlAvailable: SystemTools().perlPath() != nil,
+        stacksRootExists: AppSettings.stacksRootExists(),
+        stacksRootPath: AppSettings.stacksRoot.path, containerCount: containers
+    )
+    print("snapshot: \(snapshot)")
+    print("perl: \(SystemTools().perlPath() ?? "MISSING")")
+    if let compose = ComposeCommand.detect(dockerBinary: binary, pluginWorks: { _ in false }) {
+        print("standalone docker-compose: \(compose)")
+    }
+    print("docker compose plugin works: \(pluginWorks)")
+    let advisories = StartupDiagnostics.evaluate(snapshot)
+    if advisories.isEmpty {
+        print("advisories: none (healthy)")
+    } else {
+        for advisory in advisories { print("  [\(advisory.severity)] \(advisory.title) — \(advisory.remedy)") }
+    }
+
 case nil:
     await listContainers()
 

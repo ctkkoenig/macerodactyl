@@ -149,6 +149,14 @@ public struct DockerCLI: Sendable {
         }
     }
 
+    /// True if `docker compose version` succeeds (the plugin is installed).
+    public func composePluginWorks() async -> Bool {
+        guard let result = try? await execute(["compose", "version"], timeout: .seconds(10)) else {
+            return false
+        }
+        return result.exitCode == 0
+    }
+
     static func indicatesDaemonDown(_ stderr: String) -> Bool {
         stderr.contains("Cannot connect to the Docker daemon")
             || stderr.contains("Is the docker daemon running")

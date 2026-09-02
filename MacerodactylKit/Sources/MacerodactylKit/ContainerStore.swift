@@ -45,6 +45,7 @@ public final class ContainerStore {
     // MARK: Binary / lifecycle
 
     public func resolveBinary() {
+        composeCache = nil // provider may have changed
         if let url = DockerBinaryLocator.resolve(override: AppSettings.dockerPathOverride) {
             cli = DockerCLI(binary: url)
             if availability == .binaryNotFound { setAvailability(.unknown) }
@@ -123,6 +124,7 @@ public final class ContainerStore {
         } catch {
             lastError = Self.describe(error)
         }
+        await refreshAdvisories()
     }
 
     // MARK: Power actions
@@ -156,15 +158,22 @@ public final class ContainerStore {
         guard let workingDir = stack.workingDir else {
             throw DockerError.nonZeroExit(code: 1, stderr: "Stack has no recorded working directory")
         }
-        let composeArgs: [String] = switch action {
-        case .start: ["compose", "--project-directory", workingDir, "up", "-d"]
-        case .stop: ["compose", "--project-directory", workingDir, "stop"]
-        case .restart: ["compose", "--project-directory", workingDir, "restart"]
+        let compose = await resolveCompose(cli: cli)
+        guard let compose else {
+            let message = "Neither `docker compose` nor a `docker-compose` binary is available. Install Docker Compose to control whole stacks."
+            lastError = message
+            throw DockerError.nonZeroExit(code: 1, stderr: message)
         }
+        let subArgs: [String] = switch action {
+        case .start: ["--project-directory", workingDir, "up", "-d"]
+        case .stop: ["--project-directory", workingDir, "stop"]
+        case .restart: ["--project-directory", workingDir, "restart"]
+        }
+        let (executable, args) = compose.invocation(subArgs)
         for container in stack.containers { busyContainerIDs.insert(container.id) }
         defer { for container in stack.containers { busyContainerIDs.remove(container.id) } }
         do {
-            try await cli.run(composeArgs, timeout: .seconds(300))
+            try await DockerCLI(binary: executable).run(args, timeout: .seconds(300))
         } catch {
             lastError = Self.describe(error)
             await refresh()
@@ -173,8 +182,45 @@ public final class ContainerStore {
         await refresh()
     }
 
+    private var composeCache: ComposeCommand?
+
+    /// Resolves and caches which compose shape this machine has.
+    func resolveCompose(cli: DockerCLI) async -> ComposeCommand? {
+        if let composeCache { return composeCache }
+        let works = await cli.composePluginWorks()
+        let resolved = ComposeCommand.detect(dockerBinary: cli.binary, pluginWorks: { _ in works })
+        composeCache = resolved
+        return resolved
+    }
+
     public func clearError() {
         lastError = nil
+    }
+
+    /// Snapshots the environment for cold-start diagnostics, using state the
+    /// store already knows plus cheap filesystem checks.
+    public func environmentSnapshot(systemTools: SystemTools = SystemTools()) async -> EnvironmentSnapshot {
+        let composeAvailable: Bool
+        if let cli, availability == .ready {
+            composeAvailable = await resolveCompose(cli: cli) != nil
+        } else {
+            composeAvailable = false
+        }
+        return EnvironmentSnapshot(
+            dockerResolved: cli != nil,
+            daemon: availability,
+            composeAvailable: composeAvailable,
+            perlAvailable: systemTools.perlPath() != nil,
+            stacksRootExists: AppSettings.stacksRootExists(),
+            stacksRootPath: AppSettings.stacksRoot.path,
+            containerCount: groups.all.count
+        )
+    }
+
+    public private(set) var advisories: [StartupAdvisory] = []
+
+    public func refreshAdvisories() async {
+        advisories = StartupDiagnostics.evaluate(await environmentSnapshot())
     }
 
     nonisolated static func describe(_ error: Error) -> String {

@@ -3,7 +3,11 @@ import Testing
 @testable import MacerodactylKit
 
 @Suite struct ScheduleTests {
-    private func makeService(managesLaunchd: Bool = false) throws -> (ScheduleService, cleanup: () -> Void) {
+    private func makeService(
+        dockerPath: String = "/fake/resolved/bin/docker",
+        perlPath: String? = "/usr/bin/perl",
+        managesLaunchd: Bool = false
+    ) throws -> (ScheduleService, cleanup: () -> Void) {
         let fm = FileManager.default
         let base = fm.temporaryDirectory.appending(path: "sched-\(UUID().uuidString)")
         let agents = base.appending(path: "LaunchAgents")
@@ -11,8 +15,9 @@ import Testing
         try fm.createDirectory(at: agents, withIntermediateDirectories: true)
         try fm.createDirectory(at: logs, withIntermediateDirectories: true)
         let service = ScheduleService(
-            dockerPath: "/fake/resolved/bin/docker",
-            launchAgentsDirectory: agents, logsDirectory: logs, managesLaunchd: managesLaunchd
+            dockerPath: dockerPath,
+            launchAgentsDirectory: agents, logsDirectory: logs,
+            managesLaunchd: managesLaunchd, perlPath: perlPath
         )
         return (service, { try? fm.removeItem(at: base) })
     }
@@ -127,6 +132,64 @@ import Testing
         )
         #expect(elsewhere.health(forContainerName: "bot")
             == .binaryOutdated(installed: realBinary.path, current: "/somewhere/else/docker"))
+    }
+
+    @Test func missingPerlDropsWrapperButStillSchedules() throws {
+        let (service, cleanup) = try makeService(perlPath: nil)
+        defer { cleanup() }
+        let dict = service.plistDictionary(for: RestartSchedule(containerName: "bot", hour: 3, minute: 0))
+        let args = try #require(dict["ProgramArguments"] as? [String])
+        // No perl wrapper — docker runs directly (schedule still fires, just
+        // without the hard-deadline safeguard).
+        #expect(args == ["/fake/resolved/bin/docker", "restart", "bot"])
+        #expect(!args.contains("/usr/bin/perl"))
+        // docker-path parsing still finds it for health/repair.
+        #expect(service.installedDockerPath(forContainerName: "bot") == nil) // not installed yet
+        try service.install(RestartSchedule(containerName: "bot", hour: 3, minute: 0))
+        #expect(service.installedDockerPath(forContainerName: "bot") == "/fake/resolved/bin/docker")
+    }
+
+    @Test func repairRewritesStalePlistsWithCurrentPath() throws {
+        // Install two schedules under an "old provider" path…
+        let (oldService, cleanup) = try makeService(dockerPath: "/old/provider/bin/docker")
+        defer { cleanup() }
+        try oldService.install(RestartSchedule(containerName: "bot", hour: 1, minute: 0))
+        try oldService.install(RestartSchedule(containerName: "scraper", hour: 2, minute: 0, weekdays: [1, 3]))
+
+        // …then a real executable becomes the current docker (different path).
+        let realDocker = FileManager.default.temporaryDirectory.appending(path: "docker-\(UUID().uuidString)")
+        try Data("#!/bin/sh\n".utf8).write(to: realDocker)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: realDocker.path)
+        defer { try? FileManager.default.removeItem(at: realDocker) }
+
+        let current = ScheduleService(
+            dockerPath: realDocker.path,
+            launchAgentsDirectory: oldService.launchAgentsDirectory,
+            logsDirectory: oldService.logsDirectory, managesLaunchd: false, perlPath: "/usr/bin/perl"
+        )
+        // Both are detected as needing repair (old path isn't executable).
+        #expect(Set(current.schedulesNeedingRepair().map(\.containerName)) == ["bot", "scraper"])
+
+        // One action rewrites both.
+        let repaired = try current.repairAll()
+        #expect(Set(repaired) == ["bot", "scraper"])
+        #expect(current.schedulesNeedingRepair().isEmpty)
+        #expect(current.installedDockerPath(forContainerName: "bot") == realDocker.path)
+        #expect(current.installedDockerPath(forContainerName: "scraper") == realDocker.path)
+        // The weekday schedule survived the rewrite intact.
+        #expect(current.schedule(forContainerName: "scraper")?.weekdays == [1, 3])
+    }
+
+    @Test func repairLeavesMatchingSchedulesUntouched() throws {
+        let realDocker = FileManager.default.temporaryDirectory.appending(path: "docker-\(UUID().uuidString)")
+        try Data("#!/bin/sh\n".utf8).write(to: realDocker)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: realDocker.path)
+        defer { try? FileManager.default.removeItem(at: realDocker) }
+        let (service, cleanup) = try makeService(dockerPath: realDocker.path)
+        defer { cleanup() }
+        try service.install(RestartSchedule(containerName: "bot", hour: 1, minute: 0))
+        #expect(service.schedulesNeedingRepair().isEmpty)
+        #expect(try service.repairAll().isEmpty)
     }
 
     @Test func installRecreatesDeletedLogDirectory() throws {

@@ -96,8 +96,14 @@ public struct ScheduleService: Sendable {
         + " after ${d}s (docker did not respond; the daemon may be down or the socket is stale)\\n\"; exit 124} "
         + "exit($s>>8);"
 
-    public init(dockerPath: String) throws {
+    /// Resolved /usr/bin/perl, or nil if system perl is missing. When nil the
+    /// deadline wrapper is dropped and the plist runs docker directly (see
+    /// plistDictionary) — schedules still fire, without the hang safeguard.
+    public let perlPath: String?
+
+    public init(dockerPath: String, systemTools: SystemTools = SystemTools()) throws {
         self.dockerPath = dockerPath
+        self.perlPath = systemTools.perlPath()
         self.launchAgentsDirectory = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Library/LaunchAgents")
         self.logsDirectory = try AppPaths.supportDirectory().appending(path: "schedule-logs")
@@ -106,8 +112,9 @@ public struct ScheduleService: Sendable {
         try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
     }
 
-    init(dockerPath: String, launchAgentsDirectory: URL, logsDirectory: URL, managesLaunchd: Bool) {
+    init(dockerPath: String, launchAgentsDirectory: URL, logsDirectory: URL, managesLaunchd: Bool, perlPath: String? = "/usr/bin/perl") {
         self.dockerPath = dockerPath
+        self.perlPath = perlPath
         self.launchAgentsDirectory = launchAgentsDirectory
         self.logsDirectory = logsDirectory
         self.managesLaunchd = managesLaunchd
@@ -121,14 +128,20 @@ public struct ScheduleService: Sendable {
     /// There is deliberately no RunAtLoad: absent means false, so loading the
     /// agent at login never runs a restart.
     public func plistDictionary(for schedule: RestartSchedule) -> [String: Any] {
-        // The restart runs under a perl deadline wrapper (see deadlineScript)
-        // so a hung docker can't sit in `state = running` forever. Every path
-        // is absolute — launchd inherits no shell PATH — and nothing passes
-        // through a shell.
-        let programArguments = [
-            "/usr/bin/perl", "-e", Self.deadlineScript, "--",
-            String(Self.restartDeadlineSeconds), dockerPath, "restart", schedule.containerName,
-        ]
+        // The restart normally runs under a perl deadline wrapper (see
+        // deadlineScript) so a hung docker can't sit in `state = running`
+        // forever. If system perl is missing we run docker directly rather
+        // than not schedule at all. Every path is absolute — launchd inherits
+        // no shell PATH — and nothing passes through a shell.
+        let programArguments: [String]
+        if let perlPath {
+            programArguments = [
+                perlPath, "-e", Self.deadlineScript, "--",
+                String(Self.restartDeadlineSeconds), dockerPath, "restart", schedule.containerName,
+            ]
+        } else {
+            programArguments = [dockerPath, "restart", schedule.containerName]
+        }
         var dict: [String: Any] = [
             "Label": schedule.label,
             "ProgramArguments": programArguments,
@@ -170,7 +183,7 @@ public struct ScheduleService: Sendable {
         }
         let path = plistPath(for: schedule)
         if FileManager.default.fileExists(atPath: path.path) {
-            try? launchctl("bootout", "gui/\(getuid())/\(schedule.label)")
+            _ = try? launchctl("bootout", "gui/\(getuid())/\(schedule.label)")
         }
         do {
             let data = try PropertyListSerialization.data(
@@ -284,6 +297,35 @@ public struct ScheduleService: Sendable {
             return .binaryOutdated(installed: installed, current: dockerPath)
         }
         return .ok
+    }
+
+    // MARK: Repair (rewrite stale plists with the current resolved path)
+
+    /// Every installed schedule whose baked docker path no longer matches the
+    /// current resolved binary (missing or merely different). These are the
+    /// agents that would fire into nothing after a provider switch.
+    public func schedulesNeedingRepair() -> [RestartSchedule] {
+        list().filter { schedule in
+            switch health(forContainerName: schedule.containerName) {
+            case .ok, nil: false
+            case .binaryMissing, .binaryOutdated: true
+            }
+        }
+    }
+
+    /// Rewrites every stale schedule's plist with the current resolved docker
+    /// path (and current perl wrapper) in one action, reloading each agent.
+    /// Returns the containers repaired. Partial failure throws after recording
+    /// which succeeded is not attempted — install() is atomic per agent, and
+    /// the first failure surfaces so the user isn't told "all fixed" falsely.
+    @discardableResult
+    public func repairAll() throws -> [String] {
+        var repaired: [String] = []
+        for schedule in schedulesNeedingRepair() {
+            try install(schedule) // rewrites with current dockerPath + perlPath
+            repaired.append(schedule.containerName)
+        }
+        return repaired
     }
 
     // MARK: Run results (failure surfacing)
