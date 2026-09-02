@@ -194,4 +194,89 @@ import Testing
         let after = try #require(fixture.service.modificationDate("docker-compose.yml"))
         #expect(after > before)
     }
+
+    // MARK: mkdir / rename / delete / upload / download (T2.3)
+
+    @Test func makeDirectoryCreatesNestedAndIsIdempotentOnDir() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        try fixture.service.makeDirectory("data/worlds")
+        #expect(try fixture.service.list().map(\.name).contains("data"))
+        #expect(try fixture.service.list("data").map(\.name) == ["worlds"])
+        // An existing directory is fine; an existing file at the path is not.
+        try fixture.service.makeDirectory("data/worlds")
+        #expect(throws: FileServiceError.notARegularFile) { try fixture.service.makeDirectory(".env") }
+    }
+
+    @Test func renameMovesWithinTreeAndWontClobber() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        try fixture.service.move(from: "docker-compose.yml", to: "compose.yaml")
+        #expect(try fixture.service.list().map(\.name).contains("compose.yaml"))
+        #expect(!(try fixture.service.list().map(\.name).contains("docker-compose.yml")))
+        // Won't overwrite an existing destination.
+        #expect(throws: (any Error).self) { try fixture.service.move(from: "compose.yaml", to: ".env") }
+        #expect(throws: FileServiceError.notFound) { try fixture.service.move(from: "nope.txt", to: "x.txt") }
+    }
+
+    @Test func deleteRemovesFileAndDirectoryButNotRoot() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        try fixture.service.delete(".env")
+        #expect(!(try fixture.service.list().map(\.name).contains(".env")))
+        try fixture.service.delete("config")  // recursive
+        #expect(!(try fixture.service.list().map(\.name).contains("config")))
+        // The root itself cannot be deleted.
+        #expect(throws: FileServiceError.invalidPath) { try fixture.service.delete("") }
+        #expect(throws: FileServiceError.notFound) { try fixture.service.delete("gone.txt") }
+    }
+
+    @Test func uploadWritesBinaryAndDownloadReadsItBack() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        let bytes = Data([0x50, 0x4B, 0x03, 0x04, 0x00, 0xFF, 0xFE])  // NUL + non-UTF8 (a jar shape)
+        try fixture.service.writeData("plugins/plugin.jar", data: bytes)
+        let target = try fixture.service.downloadTarget("plugins/plugin.jar")
+        #expect(target.size == bytes.count)
+        #expect(try Data(contentsOf: target.url) == bytes)
+        // Download refuses a directory.
+        #expect(throws: FileServiceError.isDirectory) { _ = try fixture.service.downloadTarget("plugins") }
+    }
+
+    @Test func uploadRefusesOversizePayload() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        let big = Data(count: FileService.maxUploadBytes + 1)
+        #expect(throws: FileServiceError.tooLarge(actualBytes: big.count, limitBytes: FileService.maxUploadBytes)) {
+            try fixture.service.writeData("huge.bin", data: big)
+        }
+    }
+
+    @Test func newOperationsRejectEveryTraversalShape() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        let service = fixture.service
+        let escapes = ["../secret/x", "config/../../secret/x", "%2e%2e/secret/x", "..%2fsecret/x"]
+        for path in escapes {
+            #expect(throws: FileServiceError.escapesRoot) { try service.makeDirectory(path) }
+            #expect(throws: FileServiceError.escapesRoot) { try service.writeData(path, data: Data("x".utf8)) }
+            #expect(throws: FileServiceError.escapesRoot) { try service.delete(path) }
+            #expect(throws: FileServiceError.escapesRoot) { _ = try service.downloadTarget(path) }
+            // move is confined at BOTH ends.
+            #expect(throws: FileServiceError.escapesRoot) { try service.move(from: ".env", to: path) }
+            #expect(throws: FileServiceError.escapesRoot) { try service.move(from: path, to: "x") }
+        }
+        for path in ["/etc/passwd", "~/anything", "config\0/x"] {
+            #expect(throws: FileServiceError.invalidPath) { try service.makeDirectory(path) }
+            #expect(throws: FileServiceError.invalidPath) { try service.delete(path) }
+        }
+        // A rename cannot escape via a symlinked destination parent either.
+        let fm = FileManager.default
+        try fm.createSymbolicLink(
+            at: fixture.stackDir.appending(path: "out"), withDestinationURL: fixture.outside)
+        #expect(throws: FileServiceError.escapesRoot) { try service.move(from: ".env", to: "out/stolen.env") }
+        // Nothing outside actually changed.
+        #expect(fm.fileExists(atPath: fixture.outside.appending(path: "creds.txt").path))
+        #expect(!fm.fileExists(atPath: fixture.outside.appending(path: "stolen.env").path))
+    }
 }

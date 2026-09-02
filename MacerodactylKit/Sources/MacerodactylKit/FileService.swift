@@ -160,10 +160,43 @@ public struct FileService: Sendable {
         if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
             throw FileServiceError.isDirectory
         }
-
         let restored = lineEnding == .crlf ? text.replacingOccurrences(of: "\n", with: "\r\n") : text
-        let data = Data(restored.utf8)
+        try atomicWrite(Data(restored.utf8), to: url)
+    }
 
+    /// Largest file the panel will accept in a single upload. Bounds memory and
+    /// gives a sane guard against filling the disk from one request. Uploads go
+    /// into a container's own stack folder (mods, jars, world data), so this is
+    /// generous but finite.
+    public static let maxUploadBytes = 256 * 1024 * 1024
+
+    /// Writes raw bytes (binary-safe) to a path in the tree, atomically. Used by
+    /// file upload. Refuses to overwrite a directory; refuses oversize payloads.
+    public func writeData(_ relativePath: String, data: Data) throws {
+        guard data.count <= Self.maxUploadBytes else {
+            throw FileServiceError.tooLarge(actualBytes: data.count, limitBytes: Self.maxUploadBytes)
+        }
+        let url = try resolve(relativePath)
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+            throw FileServiceError.isDirectory
+        }
+        // The resolved parent is already confined to the tree; create it so an
+        // upload into a new subfolder works without a separate mkdir.
+        let parent = url.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: parent.path) {
+            do {
+                try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+            } catch {
+                throw FileServiceError.io(error.localizedDescription)
+            }
+        }
+        try atomicWrite(data, to: url)
+    }
+
+    /// Atomic write: temp file beside the target, fsync, then swap into place —
+    /// a crash mid-write can never truncate the original.
+    private func atomicWrite(_ data: Data, to url: URL) throws {
         let temp = url.deletingLastPathComponent()
             .appending(path: ".\(url.lastPathComponent).mcdtmp-\(UUID().uuidString.prefix(8))")
         do {
@@ -180,6 +213,79 @@ public struct FileService: Sendable {
             try? FileManager.default.removeItem(at: temp)
             throw FileServiceError.io(error.localizedDescription)
         }
+    }
+
+    // MARK: Directory / rename / delete
+
+    /// Creates a directory (and any missing parents) inside the tree. Idempotent
+    /// only in that an existing directory is not an error; an existing *file* at
+    /// the path is.
+    public func makeDirectory(_ relativePath: String) throws {
+        let url = try resolve(relativePath)
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) {
+            if isDir.boolValue { return }
+            throw FileServiceError.notARegularFile
+        }
+        do {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        } catch {
+            throw FileServiceError.io(error.localizedDescription)
+        }
+    }
+
+    /// Renames/moves an entry. BOTH ends are confined: source and destination
+    /// each pass through `resolve`, so neither can point outside the tree. Never
+    /// clobbers an existing destination.
+    public func move(from: String, to: String) throws {
+        let source = try resolve(from)
+        let destination = try resolve(to)
+        guard FileManager.default.fileExists(atPath: source.path) else { throw FileServiceError.notFound }
+        guard !FileManager.default.fileExists(atPath: destination.path) else {
+            throw FileServiceError.io("A file already exists at the destination.")
+        }
+        do {
+            try FileManager.default.moveItem(at: source, to: destination)
+        } catch {
+            throw FileServiceError.io(error.localizedDescription)
+        }
+    }
+
+    /// Deletes a file or directory (recursively) inside the tree. Refuses to
+    /// delete the confinement root itself.
+    public func delete(_ relativePath: String) throws {
+        let url = try resolve(relativePath)
+        let resolvedRoot = URL(fileURLWithPath: root.path).resolvingSymlinksInPath().standardizedFileURL
+        guard url.standardizedFileURL.path != resolvedRoot.path else {
+            throw FileServiceError.invalidPath
+        }
+        guard FileManager.default.fileExists(atPath: url.path) else { throw FileServiceError.notFound }
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            throw FileServiceError.io(error.localizedDescription)
+        }
+    }
+
+    // MARK: Download
+
+    /// A validated, in-tree regular file plus its size, for streaming download.
+    /// Binary is fine here (unlike the text editor). Directories and non-regular
+    /// files are rejected.
+    public func downloadTarget(_ relativePath: String) throws -> (url: URL, size: Int) {
+        let url = try resolve(relativePath)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
+            throw FileServiceError.notFound
+        }
+        guard !isDir.boolValue else { throw FileServiceError.isDirectory }
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let fileType = attributes?[.type] as? FileAttributeType
+        guard fileType == .typeRegular || fileType == .typeSymbolicLink else {
+            throw FileServiceError.notARegularFile
+        }
+        let size = (attributes?[.size] as? Int) ?? 0
+        return (url, size)
     }
 
     // MARK: Change detection
