@@ -61,7 +61,28 @@ case "audit":
         )
     }
 
+case "daemon":
+    // Manage the web-panel LaunchAgent: install <binpath> | uninstall | status.
+    let manager = try PanelDaemonManager()
+    switch args.count >= 2 ? args[1] : "status" {
+    case "install":
+        guard args.count == 3 else {
+            print("usage: paneltool daemon install <path-to-macerodactyld>")
+            break
+        }
+        try manager.install(daemonBinaryPath: args[2])
+        print("installed LaunchAgent → \(manager.plistPath.path)")
+        print("binary: \(args[2]); loaded: \(manager.isLoaded())")
+    case "uninstall":
+        try manager.uninstall()
+        print("uninstalled panel LaunchAgent")
+    default:
+        print("installed: \(manager.isInstalled)  loaded: \(manager.isLoaded())")
+        if let path = manager.installedBinaryPath() { print("binary: \(path)") }
+    }
+
 default:
     print("usage: paneltool list | add-admin U P | add-user U P | grant U CONTAINER perms | audit")
+    print("       paneltool daemon install <macerodactyld-path> | uninstall | status")
     print("db: \(dbPath)")
 }
