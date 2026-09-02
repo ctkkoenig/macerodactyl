@@ -13,6 +13,9 @@ public final class PanelController {
     public private(set) var isRunning = false
     /// Set once when a first-run admin is created, for the UI to display.
     public private(set) var firstAdminPassword: String?
+    /// A user-facing reason the panel could not start (e.g. HTTPS was requested
+    /// but no certificate could be produced). Cleared on a successful enable.
+    public private(set) var startupError: String?
 
     public init(store: PanelDataStore, containers: ContainerService) {
         self.store = store
@@ -34,10 +37,22 @@ public final class PanelController {
         }
         // Keep the shared config in step so a daemon (if used) matches the GUI.
         AppSettings.syncPanelConfig()
+        startupError = nil
 
         var tls: PanelServerConfig.TLSFiles?
-        if AppSettings.panelTLSEnabled, let paths = try? SelfSignedCertificate.ensure() {
-            tls = .init(certificatePath: paths.certificate, privateKeyPath: paths.privateKey)
+        if AppSettings.panelTLSEnabled {
+            do {
+                let paths = try SelfSignedCertificate.ensure()
+                tls = .init(certificatePath: paths.certificate, privateKeyPath: paths.privateKey)
+            } catch {
+                // Fail closed: never silently serve plaintext when HTTPS was
+                // asked for (that would also drop the Secure cookie flag).
+                await server.stop()
+                isRunning = false
+                startupError =
+                    "HTTPS is on but no certificate could be created (\(error)). The panel was not started. Install openssl, or turn HTTPS off."
+                return
+            }
         }
         let config = PanelServerConfig(port: AppSettings.panelPort, bindLAN: AppSettings.panelBindLAN, tls: tls)
         await server.stop()

@@ -4,12 +4,36 @@ import HummingbirdAuth
 import MacerodactylKit
 import NIOCore
 
+/// Caches the (relatively expensive) docker-reachability probe so an
+/// unauthenticated flood of `GET /healthz` can't fan out into one `docker`
+/// subprocess per request. A few seconds' staleness is fine for a liveness
+/// signal.
+actor HealthProbeCache {
+    private var value: Bool?
+    private var checkedAt: Date?
+    private let ttl: TimeInterval
+
+    init(ttl: TimeInterval = 5) { self.ttl = ttl }
+
+    func reachable(_ probe: () async -> Bool) async -> Bool {
+        if let value, let checkedAt, Date().timeIntervalSince(checkedAt) < ttl {
+            return value
+        }
+        let result = await probe()
+        value = result
+        checkedAt = Date()
+        return result
+    }
+}
+
 struct PanelRoutes {
     let store: PanelDataStore
     let rateLimiter: LoginRateLimiter
     let containers: ContainerService
     /// Mark session cookies `Secure` (set when the server is serving HTTPS).
     var secureCookies: Bool = false
+    /// Shared across requests for the lifetime of the router (see `healthz`).
+    let healthProbe = HealthProbeCache()
 
     func register(on router: Router<PanelRequestContext>) {
         router.get("/", use: root)
@@ -68,7 +92,7 @@ struct PanelRoutes {
     /// dependency separately so a monitor can distinguish "server up, docker
     /// down".
     @Sendable func healthz(_ request: Request, context: PanelRequestContext) async throws -> Response {
-        let dockerOK = await containers.dockerReachable()
+        let dockerOK = await healthProbe.reachable { await containers.dockerReachable() }
         return encode(HealthResponse(status: "ok", version: AppInfo.version, docker: dockerOK ? "ready" : "unreachable"))
     }
 

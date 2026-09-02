@@ -50,6 +50,20 @@ import Testing
         #expect(await limiter.check(username: "dave", ip: "10.0.0.9").allowed)
     }
 
+    /// Security review #3: behind a tunnel every peer is loopback, so the IP
+    /// bucket must NOT throttle — otherwise five bad logins lock out everyone.
+    /// The per-account bucket must still work.
+    @Test func loopbackIPIsExemptButAccountStillThrottles() async {
+        let clock = Clock()
+        let limiter = LoginRateLimiter(threshold: 1, baseDelay: 100, maxDelay: 600, now: { clock.now })
+        // alice fails from loopback → her account locks, but the shared IP bucket must not.
+        await limiter.recordFailure(username: "alice", ip: "127.0.0.1")
+        #expect(!(await limiter.check(username: "alice", ip: "127.0.0.1").allowed))  // account locked
+        // A DIFFERENT user from the same loopback peer is NOT collateral-damaged.
+        #expect(await limiter.check(username: "carol", ip: "127.0.0.1").allowed)
+        #expect(await limiter.check(username: "dave", ip: "::1").allowed)
+    }
+
     @Test func successClearsThrottle() async {
         let clock = Clock()
         let limiter = LoginRateLimiter(threshold: 1, baseDelay: 100, maxDelay: 600, now: { clock.now })

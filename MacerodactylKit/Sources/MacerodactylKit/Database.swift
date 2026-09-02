@@ -26,13 +26,25 @@ public final class Database: @unchecked Sendable {
     private var handle: OpaquePointer?
     private let lock = NSLock()
 
-    public init(path: String) throws {
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+    public convenience init(path: String) throws {
+        try self.init(path: path, readOnly: false)
+    }
+
+    /// `readOnly` opens the file with neither CREATE nor write access and skips
+    /// the WAL pragma — used to validate a backup without creating an empty file
+    /// for a missing path or writing WAL/SHM litter beside it.
+    public init(path: String, readOnly: Bool) throws {
+        let flags =
+            readOnly
+            ? (SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX)
+            : (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX)
         guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK else {
             let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
             throw DatabaseError.openFailed(message)
         }
-        try execute("PRAGMA journal_mode=WAL")
+        if !readOnly {
+            try execute("PRAGMA journal_mode=WAL")
+        }
         try execute("PRAGMA foreign_keys=ON")
     }
 
@@ -149,16 +161,29 @@ public enum PanelBackup {
     /// path returned, so a bad restore can be undone. Caller must stop the panel.
     @discardableResult
     public static func restore(from backupPath: String, to dbPath: String) throws -> String {
-        // 1. The backup must open and pass integrity_check before we touch the
-        //    live database — never install a corrupt backup.
+        let fm = FileManager.default
+        // 0. The backup must actually exist. Opening a missing path read-WRITE
+        //    would CREATE an empty database that then passes integrity_check —
+        //    and installing THAT silently wipes the live accounts/grants/audit.
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: backupPath, isDirectory: &isDir), !isDir.boolValue else {
+            throw DatabaseError.openFailed("backup file does not exist: \(backupPath)")
+        }
+        // 1. The backup must open READ-ONLY (never create), pass integrity_check,
+        //    AND look like a panel database (a valid but foreign/empty SQLite
+        //    file would otherwise install and mint a fresh admin over your data).
         let healthy: Bool
+        let looksLikePanel: Bool
         do {
-            let check = try Database(path: backupPath)
+            let check = try Database(path: backupPath, readOnly: true)
             healthy = check.isHealthy
+            looksLikePanel = check.userVersion >= 1
         }
         guard healthy else { throw DatabaseError.stepFailed("backup failed integrity check: \(backupPath)") }
+        guard looksLikePanel else {
+            throw DatabaseError.stepFailed("not a Macerodactyl panel backup (no schema version): \(backupPath)")
+        }
 
-        let fm = FileManager.default
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let sidelined = "\(dbPath).pre-restore-\(stamp)"
         if fm.fileExists(atPath: dbPath) { try fm.moveItem(atPath: dbPath, toPath: sidelined) }

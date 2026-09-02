@@ -50,6 +50,13 @@ public enum SelfSignedCertificate {
 
     static func generate(into paths: Paths) throws -> Paths {
         guard let openssl = opensslPath() else { throw CertError.opensslNotFound }
+        // Create the key file 0600 BEFORE openssl writes into it. openssl opens
+        // `-keyout` with fopen("w") (O_CREAT|O_TRUNC, no unlink), so an existing
+        // file keeps its mode — closing the window where the unencrypted key
+        // would briefly sit world-readable under the process umask.
+        let fm = FileManager.default
+        try? fm.removeItem(atPath: paths.privateKey)
+        fm.createFile(atPath: paths.privateKey, contents: nil, attributes: [.posixPermissions: 0o600])
         let process = Process()
         process.executableURL = URL(fileURLWithPath: openssl)
         process.arguments = [
@@ -68,8 +75,8 @@ public enum SelfSignedCertificate {
         guard process.terminationStatus == 0 else {
             throw CertError.generationFailed(stderr.trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        // The private key must not be world-readable.
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: paths.privateKey)
+        // Belt and suspenders — the file was pre-created 0600, re-assert it.
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: paths.privateKey)
         return paths
     }
 }

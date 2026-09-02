@@ -96,13 +96,22 @@ public actor LoginRateLimiter {
     private func accountKey(_ username: String) -> String { "acct:\(username.lowercased())" }
     private func ipKey(_ ip: String) -> String { "ip:\(ip)" }
 
+    /// The recommended topology terminates TLS at a tunnel, so every request's
+    /// peer is loopback — one shared `ip:127.0.0.1` bucket that, if throttled,
+    /// locks out ALL users (and now persists across restarts). An IP dimension is
+    /// meaningless when it can't distinguish clients, so skip it for loopback and
+    /// rely on the per-account bucket. Real per-IP throttling only makes sense on
+    /// a direct LAN bind, where peers are distinct.
+    private func isLoopback(_ ip: String) -> Bool {
+        ip == "127.0.0.1" || ip == "::1" || ip == "0:0:0:0:0:0:0:1" || ip.hasPrefix("127.")
+    }
+
     /// Whether a login attempt may proceed. Blocked if *either* the account or
     /// the IP is currently locked out; the longer remaining lockout is returned.
     public func check(username: String, ip: String) -> Decision {
         let current = now()
-        let worst = max(
-            remaining(store.bucket(accountKey(username)), at: current),
-            remaining(store.bucket(ipKey(ip)), at: current))
+        let ipRemaining = isLoopback(ip) ? 0 : remaining(store.bucket(ipKey(ip)), at: current)
+        let worst = max(remaining(store.bucket(accountKey(username)), at: current), ipRemaining)
         return Decision(allowed: worst <= 0, retryAfter: max(worst, 0))
     }
 
@@ -110,13 +119,13 @@ public actor LoginRateLimiter {
     /// threshold: delay = baseDelay * 2^(failures - threshold), capped.
     public func recordFailure(username: String, ip: String) {
         bump(accountKey(username))
-        bump(ipKey(ip))
+        if !isLoopback(ip) { bump(ipKey(ip)) }
     }
 
     /// Clears both keys — a correct password ends the throttling.
     public func recordSuccess(username: String, ip: String) {
         store.clear(accountKey(username))
-        store.clear(ipKey(ip))
+        if !isLoopback(ip) { store.clear(ipKey(ip)) }
     }
 
     private func bump(_ key: String) {

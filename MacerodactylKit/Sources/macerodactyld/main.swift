@@ -40,8 +40,11 @@ if let created = try? await AccountManager(store: store).createFirstAdminIfNeede
     let creds = "username: \(created.username)\npassword: \(created.password)\n"
     if let dir = try? AppPaths.supportDirectory() {
         let url = dir.appending(path: "first-admin.txt")
-        try? creds.data(using: .utf8)?.write(to: url, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        // Create 0600 at creation time — no window where the one-time password
+        // is world-readable (createFile applies the mode as the file is made).
+        try? FileManager.default.removeItem(at: url)
+        FileManager.default.createFile(
+            atPath: url.path, contents: Data(creds.utf8), attributes: [.posixPermissions: 0o600])
         logger.notice("created first admin — one-time password at \(url.path)")
     }
 }
@@ -50,6 +53,9 @@ let containers = DaemonContainerService(cli: cli, stacksRoot: config.stacksRootU
 let server = PanelServer(store: store, containers: containers)
 
 // TLS is opt-in for LAN-without-tunnel: generate a self-signed cert on demand.
+// Fail CLOSED — someone who enabled HTTPS must never be silently downgraded to
+// plaintext (which would also strip the Secure cookie flag). If the cert can't
+// be produced, refuse to serve rather than send credentials in the clear.
 var tlsFiles: PanelServerConfig.TLSFiles?
 if config.tlsEnabled {
     do {
@@ -57,7 +63,9 @@ if config.tlsEnabled {
         tlsFiles = .init(certificatePath: paths.certificate, privateKeyPath: paths.privateKey)
         logger.notice("HTTPS enabled with self-signed certificate at \(paths.certificate)")
     } catch {
-        logger.notice("TLS requested but certificate generation failed (\(error)) — serving plain HTTP")
+        fail(
+            "HTTPS was requested but the certificate could not be produced (\(error)). Refusing to serve plain HTTP. Install openssl or turn HTTPS off in the app."
+        )
     }
 }
 
