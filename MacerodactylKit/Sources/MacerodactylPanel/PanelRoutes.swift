@@ -409,12 +409,11 @@ struct PanelRoutes {
         audit(
             user: user.username, action: "container.logs", container: name, outcome: "ok",
             ip: context.clientIP, detail: "download logs")
-        let filename = name.replacingOccurrences(of: "\"", with: "") + "-logs.txt"
         return Response(
             status: .ok,
             headers: [
                 .contentType: "text/plain; charset=utf-8",
-                .contentDisposition: "attachment; filename=\"\(filename)\"",
+                .contentDisposition: Self.attachmentDisposition(filename: name + "-logs.txt"),
             ],
             body: .init(byteBuffer: ByteBuffer(string: history)))
     }
@@ -828,31 +827,47 @@ struct PanelRoutes {
         return Self.fileDownloadResponse(url: target.url, size: target.size)
     }
 
+    /// A safe `Content-Disposition: attachment` value. The quoted ASCII fallback
+    /// has control bytes, quotes, backslashes, and non-ASCII replaced (no header
+    /// splitting, no reliance on the framework's legalizer), and an RFC 6266
+    /// `filename*=UTF-8''…` preserves the real (possibly non-ASCII) name.
+    static func attachmentDisposition(filename: String) -> String {
+        let ascii = String(
+            filename.unicodeScalars.map { scalar -> Character in
+                if scalar.value < 0x20 || scalar.value > 0x7E || scalar == "\"" || scalar == "\\" {
+                    return "_"
+                }
+                return Character(scalar)
+            })
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        let encoded = filename.addingPercentEncoding(withAllowedCharacters: allowed) ?? ascii
+        return "attachment; filename=\"\(ascii)\"; filename*=UTF-8''\(encoded)"
+    }
+
     /// Streams a confined file from disk in bounded chunks so a large download
     /// never loads the whole file into memory. The path was already validated by
-    /// `FileService.downloadTarget`. `Content-Disposition: attachment` with a
-    /// sanitized filename; the browser saves rather than renders it.
+    /// `FileService.downloadTarget`. Reads at most the declared `size` so the body
+    /// can never exceed the `Content-Length` even if the file grows mid-stream.
     static func fileDownloadResponse(url: URL, size: Int) -> Response {
-        let filename = url.lastPathComponent.replacingOccurrences(of: "\"", with: "")
+        let disposition = attachmentDisposition(filename: url.lastPathComponent)
         let body = ResponseBody(contentLength: size) { writer in
             guard let handle = try? FileHandle(forReadingFrom: url) else {
                 try await writer.finish(nil)
                 return
             }
             defer { try? handle.close() }
-            while true {
-                let chunk = (try? handle.read(upToCount: 64 * 1024)) ?? Data()
+            var remaining = size
+            while remaining > 0 {
+                let chunk = (try? handle.read(upToCount: min(64 * 1024, remaining))) ?? Data()
                 if chunk.isEmpty { break }
                 try await writer.write(ByteBuffer(bytes: chunk))
+                remaining -= chunk.count
             }
             try await writer.finish(nil)
         }
         return Response(
             status: .ok,
-            headers: [
-                .contentType: "application/octet-stream",
-                .contentDisposition: "attachment; filename=\"\(filename)\"",
-            ],
+            headers: [.contentType: "application/octet-stream", .contentDisposition: disposition],
             body: body)
     }
 

@@ -506,6 +506,21 @@ import Testing
         }
     }
 
+    // MARK: Content-Disposition is injection-safe (Tier 2 review hardening)
+
+    @Test func attachmentDispositionStripsControlBytesAndEncodesUTF8() {
+        // A crafted in-tree filename with CR/LF/quote must not break the header.
+        let evil = "a\r\nb\"c.txt"
+        let value = PanelRoutes.attachmentDisposition(filename: evil)
+        #expect(!value.contains("\r"))
+        #expect(!value.contains("\n"))
+        // The quoted ASCII fallback has the quote and control bytes replaced.
+        #expect(value.contains("filename=\"a__b_c.txt\""))
+        // A non-ASCII name survives via RFC 6266 filename*.
+        let unicode = PanelRoutes.attachmentDisposition(filename: "café.txt")
+        #expect(unicode.contains("filename*=UTF-8''caf%C3%A9.txt"))
+    }
+
     // MARK: Permission mapping is position-based, not substring-based
 
     @Test func requiredPermissionMapsByRoutePositionNotSubstring() {
