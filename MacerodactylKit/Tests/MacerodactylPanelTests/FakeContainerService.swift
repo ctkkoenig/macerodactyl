@@ -72,6 +72,9 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
         }
     }
 
+    var dockerIsReachable = true
+    func dockerReachable() async -> Bool { dockerIsReachable }
+
     func schedule(containerName: String) async -> (RestartSchedule, ScheduleRunResult?)? { nil }
     func setSchedule(containerName: String, hour: Int, minute: Int, weekdays: Set<Int>) async throws {
         lock.withLock { scheduleCalls.append(("set", containerName)) }

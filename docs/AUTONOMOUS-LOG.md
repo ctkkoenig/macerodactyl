@@ -44,3 +44,8 @@ Append-only. Newest at bottom. Each entry: date, item, what I did, decisions
 - Schema v3 adds `rate_limits` (key, failures, blocked_until). `PanelDataStore` gains get/set/clear/prune. `LoginRateLimiter` refactored behind a `RateLimitStore` protocol with `InMemoryRateLimitStore` (existing fast tests, unchanged) and `SQLiteRateLimitStore` (production). PanelServer now uses the SQLite store, so both the in-process GUI server and the daemon persist throttling (same panel.sqlite, WAL = multi-process safe).
 - Verified with a real-SQLite persistence test: lock out an account, open a NEW store on the SAME file ("restart"), lockout still in effect; recordSuccess clears it persistently. Kept all prior rate-limiter tests. 141 tests.
 - Chose the protocol-backend split over rewriting the limiter so the tested backoff math and the fast in-memory tests stay intact.
+
+## 2026-09-02 — Tier 1.3 health endpoint (done) + daemon-main correction
+- Added public `GET /healthz` → {status, version, docker: ready|unreachable}. No auth, no secrets (tested it leaks no account/session data). `dockerReachable()` added to ContainerService (bounded `docker version`, 5s timeout).
+- **Correction to the Tier 1.1 note**: I had tried a *synchronous* main (Task + DispatchSemaphore) for the daemon to dodge the launchd hang. It did NOT fix launchd AND it broke standalone binding (the server Task never reaches bind while main blocks on the semaphore). Reverted to **top-level `await`** in main.swift, which serves correctly standalone (verified: /healthz live returns ok/ready). The launchd hang is unchanged and remains the documented, environment-specific blocker — NOT caused by the main structure.
+- Verified /healthz live against the standalone daemon. 142 tests.

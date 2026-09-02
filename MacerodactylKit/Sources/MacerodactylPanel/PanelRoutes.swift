@@ -11,6 +11,7 @@ struct PanelRoutes {
 
     func register(on router: Router<PanelRequestContext>) {
         router.get("/", use: root)
+        router.get("healthz", use: healthz)
         router.get("login", use: loginPage)
         router.post("login", use: login)
         router.post("logout", use: logout)
@@ -50,6 +51,23 @@ struct PanelRoutes {
     @Sendable func appPage(_ request: Request, context: PanelRequestContext) async throws -> Response {
         guard context.identity != nil else { return redirect("/login") }
         return html(PanelHTML.app())
+    }
+
+    struct HealthResponse: Encodable {
+        let status: String
+        let version: String
+        let docker: String
+    }
+
+    /// Unauthenticated liveness/health endpoint for supervisors and monitoring.
+    /// Reveals only server status, version, and whether docker is reachable —
+    /// no accounts, no container names, no secrets. Always 200 while the server
+    /// is up (that it answered is the liveness signal); `docker` reports the
+    /// dependency separately so a monitor can distinguish "server up, docker
+    /// down".
+    @Sendable func healthz(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let dockerOK = await containers.dockerReachable()
+        return encode(HealthResponse(status: "ok", version: AppInfo.version, docker: dockerOK ? "ready" : "unreachable"))
     }
 
     // MARK: Auth

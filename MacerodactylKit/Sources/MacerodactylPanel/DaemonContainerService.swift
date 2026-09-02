@@ -93,4 +93,8 @@ public struct DaemonContainerService: ContainerService {
         let service = try ScheduleService(dockerPath: cli.binary.path)
         try service.remove(containerName: containerName)
     }
+
+    public func dockerReachable() async -> Bool {
+        (try? await cli.run(["version", "--format", "{{.Server.Version}}"], timeout: .seconds(5))) != nil
+    }
 }

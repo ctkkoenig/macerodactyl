@@ -30,6 +30,8 @@ public protocol ContainerService: Sendable {
     func setSchedule(containerName: String, hour: Int, minute: Int, weekdays: Set<Int>) async throws
     /// Remove a container's schedule (no-op if none).
     func removeSchedule(containerName: String) async throws
+    /// Whether the docker daemon is reachable right now (bounded, best-effort).
+    func dockerReachable() async -> Bool
 }
 
 /// Live implementation backed by the shared `ContainerStore` (native source of
@@ -123,6 +125,11 @@ public struct LiveContainerService: ContainerService {
         guard let cli = await MainActor.run(body: { store.cli }) else { throw ContainerServiceError.notFound }
         let service = try ScheduleService(dockerPath: cli.binary.path)
         try service.remove(containerName: containerName)
+    }
+
+    public func dockerReachable() async -> Bool {
+        guard let cli = await MainActor.run(body: { store.cli }) else { return false }
+        return (try? await cli.run(["version", "--format", "{{.Server.Version}}"], timeout: .seconds(5))) != nil
     }
 }
 

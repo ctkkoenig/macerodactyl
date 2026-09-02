@@ -89,6 +89,23 @@ import Testing
         }
     }
 
+    @Test func healthzIsPublicAndLeaksNoSecrets() async throws {
+        let harness = try await makeHarness()
+        try await harness.app.test(.router) { client in
+            // No cookie, no CSRF — health is public.
+            try await client.execute(uri: "/healthz", method: .get) { response in
+                #expect(response.status == .ok)
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                #expect(json["status"] as? String == "ok")
+                #expect(json["version"] as? String == AppInfo.version)
+                #expect(json["docker"] as? String == "ready")
+                // No account, container, or session data.
+                let body = String(buffer: response.body).lowercased()
+                #expect(!body.contains("admin") && !body.contains("password") && !body.contains("session"))
+            }
+        }
+    }
+
     @Test func noSessionIsUnauthorized() async throws {
         let harness = try await makeHarness()
         try await harness.app.test(.router) { client in
