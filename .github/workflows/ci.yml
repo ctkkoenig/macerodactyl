@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Format lint
+    runs-on: ubuntu-latest
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift-format lint (strict)
+        run: |
+          swift format lint --strict --recursive --configuration .swift-format \
+            App MacerodactylKit/Sources MacerodactylKit/Tests
+
+  test:
+    name: Unit tests + app build (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Swift & Xcode versions
+        run: swift --version && xcodebuild -version
+      - name: Run MacerodactylKit test suite
+        working-directory: MacerodactylKit
+        run: swift test
+      - name: Build the macOS app (ad-hoc signed)
+        run: |
+          xcodebuild -project Macerodactyl.xcodeproj -scheme Macerodactyl \
+            -configuration Debug -derivedDataPath .ci-dd \
+            build CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=NO | \
+            grep -E 'error:|BUILD (SUCCEEDED|FAILED)' || true
+          test -d .ci-dd/Build/Products/Debug/Macerodactyl.app
+
+  integration:
+    name: End-to-end against real Docker
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Start a real Docker daemon (colima)
+        run: |
+          brew install colima docker
+          colima start --cpu 2 --memory 4 --disk 10
+          docker version
+      - name: Bring up a throwaway container
+        run: |
+          docker run -d --name ci-fixture alpine sh -c 'while true; do echo tick; sleep 1; done'
+          docker ps
+      - name: Exercise the docker-CLI core end-to-end (kitcheck)
+        working-directory: MacerodactylKit
+        run: |
+          # list + group containers through the app's real code path
+          swift run kitcheck
+          # stream logs briefly and assert the docker process is torn down (no leak)
+          swift run kitcheck logs ci-fixture 3
+          # one-shot + streamed stats, then teardown check
+          swift run kitcheck stats ci-fixture
+          # a line-based exec console command
+          swift run kitcheck exec ci-fixture 'echo hello from $(hostname)'
+      - name: Tear down
+        if: always()
+        run: docker rm -f ci-fixture || true
