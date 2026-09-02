@@ -102,11 +102,26 @@ container serving. Fixtures only (`testweb`, `fixture-bare`, `fixture-mc`); the
 real workloads (`workload-a`, `workload-b`) and the real `panel.sqlite` were never
 touched — verified by mtime at the end.
 
+## The final review earned its keep
+
+The finish-line fresh-eyes review (a third independent agent) caught a
+**high-severity bug the 208-test suite had missed**: the served 2FA login page
+had no code field and the login script treated the "code required" response as
+success — so enabling 2FA locked a user out with no in-product recovery. The
+API-level tests drove the JSON endpoint directly (with a code field), never the
+served page, so they stayed green over an unusable feature. It also flagged the
+owner's private container names leaking into committed working-logs. Both are now
+fixed and verified (the full 2FA login was driven end-to-end through the running
+container; the names are scrubbed), along with three smaller hardening items
+(TOTP replay protection, a safe-DOM invariant, a documented secret-at-rest note).
+This is exactly why the review step exists.
+
 ## Assessment
 
-See the updated assessment at the end of `AUTONOMOUS-LOG.md`. In short: the
-security model is now tested from several independent angles (unit, HTTP, fuzz,
-property, adversarial, two agent reviews) rather than asserted; the code builds
-and runs on two platforms; and the project has a real front door. The honest
-remaining gaps are the unverified launchd auto-start, the un-wired XCUITest, and
-the absence of native-app screenshots — all owner-side, all documented.
+The updated engineering assessment is in [`ASSESSMENT.md`](ASSESSMENT.md). In
+short: the security model is now tested from several independent angles (unit,
+HTTP, fuzz, property, adversarial, three agent reviews) rather than asserted; the
+code builds and runs on two platforms; and the project has a real front door. The
+honest remaining gaps are the unverified launchd auto-start, the un-wired
+XCUITest, and the absence of native-app screenshots — all owner-side, all
+documented.
