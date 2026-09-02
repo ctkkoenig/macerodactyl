@@ -55,7 +55,7 @@ Explore → Plan (record fork+choice) → Build → Verify (tests + REAL process
 - [x] T3.1 Extract web frontend from the Swift string. Decide: build-step SPA vs server-rendered+htmx (no npm in build for source-only). AC: a missed escape is no longer a latent XSS (auto-escaping templating or framework); tests; a11y pass.
 
 ### Tier 4 — widen the audience
-- [ ] T4.1 Ship the server on Linux (headless). Verify it ACTUALLY builds+runs for Linux (SwiftPM Linux build; the app target excluded). AC: `swift build` for the server product on Linux (via docker swift image) succeeds; server runs and serves; a Docker image of the panel.
+- [x] T4.1 Ship the server on Linux (headless). Verify it ACTUALLY builds+runs for Linux (SwiftPM Linux build; the app target excluded). AC: `swift build` for the server product on Linux (via docker swift image) succeeds; server runs and serves; a Docker image of the panel.
 
 ### Tier 5 — the shopfront
 - [ ] T5.1 README (real screenshots I captured), LICENSE, CONTRIBUTING, SECURITY, issue/PR templates, build-from-source w/ personal-team signing. AC: all present; README shows real screenshots; no notarization promised (no paid account).
