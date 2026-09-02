@@ -55,8 +55,10 @@ jobs:
         run: |
           docker run --rm -v "$PWD/MacerodactylKit":/src -w /src swift:6.1 bash -euxc '
             apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev
-            swift build -c release --product macerodactyld
-            swift build -c release --product kitcheck
+            # --static-swift-stdlib avoids the Linux libswiftObservation → threading::fatal
+            # dynamic-link failure (same flag the Dockerfile uses).
+            swift build -c release --static-swift-stdlib --product macerodactyld
+            swift build -c release --static-swift-stdlib --product kitcheck
           '
       # Real-Docker end-to-end: ubuntu runners have dockerd natively (no nested
       # virt needed, unlike macOS runners), so build the image and confirm the
