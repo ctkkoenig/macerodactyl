@@ -1,0 +1,330 @@
+import Foundation
+import SQLite3
+
+private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+public enum DatabaseError: Error {
+    case openFailed(String)
+    case prepareFailed(String, sql: String)
+    case stepFailed(String)
+}
+
+public enum SQLValue: Sendable, Equatable {
+    case null
+    case integer(Int64)
+    case real(Double)
+    case text(String)
+
+    var asString: String? { if case .text(let s) = self { s } else { nil } }
+    var asInt: Int64? { if case .integer(let i) = self { i } else { nil } }
+    var asDouble: Double? { if case .real(let d) = self { d } else { nil } }
+}
+
+/// Minimal wrapper over the system libsqlite3 (serialized mode, WAL). All
+/// access is funneled through an internal lock so any thread may call in.
+public final class Database: @unchecked Sendable {
+    private var handle: OpaquePointer?
+    private let lock = NSLock()
+
+    public init(path: String) throws {
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+        guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK else {
+            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
+            throw DatabaseError.openFailed(message)
+        }
+        try execute("PRAGMA journal_mode=WAL")
+        try execute("PRAGMA foreign_keys=ON")
+    }
+
+    deinit {
+        sqlite3_close_v2(handle)
+    }
+
+    public func execute(_ sql: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK else {
+            throw DatabaseError.stepFailed(String(cString: sqlite3_errmsg(handle)))
+        }
+    }
+
+    @discardableResult
+    public func run(_ sql: String, _ bindings: [SQLValue] = []) throws -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        let statement = try prepare(sql, bindings)
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw DatabaseError.stepFailed(String(cString: sqlite3_errmsg(handle)))
+        }
+        return sqlite3_last_insert_rowid(handle)
+    }
+
+    public func query(_ sql: String, _ bindings: [SQLValue] = []) throws -> [[String: SQLValue]] {
+        lock.lock()
+        defer { lock.unlock() }
+        let statement = try prepare(sql, bindings)
+        defer { sqlite3_finalize(statement) }
+
+        var rows: [[String: SQLValue]] = []
+        while true {
+            let rc = sqlite3_step(statement)
+            if rc == SQLITE_DONE { break }
+            guard rc == SQLITE_ROW else {
+                throw DatabaseError.stepFailed(String(cString: sqlite3_errmsg(handle)))
+            }
+            var row: [String: SQLValue] = [:]
+            for index in 0..<sqlite3_column_count(statement) {
+                let name = String(cString: sqlite3_column_name(statement, index))
+                switch sqlite3_column_type(statement, index) {
+                case SQLITE_INTEGER: row[name] = .integer(sqlite3_column_int64(statement, index))
+                case SQLITE_FLOAT: row[name] = .real(sqlite3_column_double(statement, index))
+                case SQLITE_TEXT: row[name] = .text(String(cString: sqlite3_column_text(statement, index)))
+                default: row[name] = .null
+                }
+            }
+            rows.append(row)
+        }
+        return rows
+    }
+
+    private func prepare(_ sql: String, _ bindings: [SQLValue]) throws -> OpaquePointer {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+            throw DatabaseError.prepareFailed(String(cString: sqlite3_errmsg(handle)), sql: sql)
+        }
+        for (offset, value) in bindings.enumerated() {
+            let index = Int32(offset + 1)
+            switch value {
+            case .null: sqlite3_bind_null(statement, index)
+            case .integer(let integer): sqlite3_bind_int64(statement, index, integer)
+            case .real(let double): sqlite3_bind_double(statement, index, double)
+            case .text(let text): sqlite3_bind_text(statement, index, text, -1, SQLITE_TRANSIENT)
+            }
+        }
+        return statement
+    }
+
+    var userVersion: Int {
+        get { (try? query("PRAGMA user_version").first?["user_version"]?.asInt).flatMap { Int($0) } ?? 0 }
+        set { try? execute("PRAGMA user_version = \(newValue)") }
+    }
+}
+
+/// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
+/// scoping, and audit never have to be retrofitted into the data model.
+public enum PanelSchema {
+    public static let currentVersion = 1
+
+    public static func migrate(_ db: Database) throws {
+        if db.userVersion < 1 {
+            try db.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    password_hash TEXT NOT NULL,
+                    is_admin INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE TABLE IF NOT EXISTS grants (
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    container_name TEXT NOT NULL,
+                    perm_view INTEGER NOT NULL DEFAULT 0,
+                    perm_power INTEGER NOT NULL DEFAULT 0,
+                    perm_files INTEGER NOT NULL DEFAULT 0,
+                    perm_console INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (user_id, container_name)
+                );
+                CREATE TABLE IF NOT EXISTS sessions (
+                    token_hash TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    expires_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS audit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    username TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    container_name TEXT,
+                    outcome TEXT NOT NULL,
+                    source_ip TEXT,
+                    detail TEXT
+                );
+                """)
+            db.userVersion = 1
+        }
+    }
+}
+
+public struct PanelUser: Sendable, Equatable, Identifiable {
+    public let id: Int64
+    public let username: String
+    public let passwordHash: String
+    public let isAdmin: Bool
+}
+
+public struct AuditEntry: Sendable, Equatable, Identifiable {
+    public let id: Int64
+    public let timestamp: String
+    public let username: String
+    public let action: String
+    public let containerName: String?
+    public let outcome: String
+    public let sourceIP: String?
+    public let detail: String?
+}
+
+/// Typed access to panel state (users, grants, sessions, audit) over Database.
+public final class PanelDataStore: Sendable {
+    private let db: Database
+
+    public init(databasePath: String) throws {
+        self.db = try Database(path: databasePath)
+        try PanelSchema.migrate(db)
+    }
+
+    // MARK: Users
+
+    @discardableResult
+    public func createUser(username: String, passwordHash: String, isAdmin: Bool) throws -> PanelUser {
+        let id = try db.run(
+            "INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)",
+            [.text(username), .text(passwordHash), .integer(isAdmin ? 1 : 0)]
+        )
+        return PanelUser(id: id, username: username, passwordHash: passwordHash, isAdmin: isAdmin)
+    }
+
+    public func user(named username: String) throws -> PanelUser? {
+        try db.query("SELECT * FROM users WHERE username = ?", [.text(username)]).first.map(Self.userFromRow)
+    }
+
+    public func user(id: Int64) throws -> PanelUser? {
+        try db.query("SELECT * FROM users WHERE id = ?", [.integer(id)]).first.map(Self.userFromRow)
+    }
+
+    public func listUsers() throws -> [PanelUser] {
+        try db.query("SELECT * FROM users ORDER BY username").map(Self.userFromRow)
+    }
+
+    public func hasAnyUser() throws -> Bool {
+        try db.query("SELECT 1 FROM users LIMIT 1").isEmpty == false
+    }
+
+    public func deleteUser(id: Int64) throws {
+        try db.run("DELETE FROM users WHERE id = ?", [.integer(id)])
+    }
+
+    public func updatePassword(userID: Int64, passwordHash: String) throws {
+        try db.run("UPDATE users SET password_hash = ? WHERE id = ?", [.text(passwordHash), .integer(userID)])
+    }
+
+    private static func userFromRow(_ row: [String: SQLValue]) -> PanelUser {
+        PanelUser(
+            id: row["id"]?.asInt ?? 0,
+            username: row["username"]?.asString ?? "",
+            passwordHash: row["password_hash"]?.asString ?? "",
+            isAdmin: (row["is_admin"]?.asInt ?? 0) != 0
+        )
+    }
+
+    // MARK: Grants
+
+    public func setGrant(userID: Int64, containerName: String, grant: ContainerGrant) throws {
+        if grant.isEmpty {
+            try db.run(
+                "DELETE FROM grants WHERE user_id = ? AND container_name = ?",
+                [.integer(userID), .text(containerName)]
+            )
+        } else {
+            try db.run("""
+                INSERT INTO grants (user_id, container_name, perm_view, perm_power, perm_files, perm_console)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, container_name) DO UPDATE SET
+                    perm_view=excluded.perm_view, perm_power=excluded.perm_power,
+                    perm_files=excluded.perm_files, perm_console=excluded.perm_console
+                """,
+                [.integer(userID), .text(containerName),
+                 .integer(grant.view ? 1 : 0), .integer(grant.power ? 1 : 0),
+                 .integer(grant.files ? 1 : 0), .integer(grant.console ? 1 : 0)]
+            )
+        }
+    }
+
+    public func grants(forUserID userID: Int64) throws -> [String: ContainerGrant] {
+        var result: [String: ContainerGrant] = [:]
+        for row in try db.query("SELECT * FROM grants WHERE user_id = ?", [.integer(userID)]) {
+            guard let name = row["container_name"]?.asString else { continue }
+            result[name] = ContainerGrant(
+                view: (row["perm_view"]?.asInt ?? 0) != 0,
+                power: (row["perm_power"]?.asInt ?? 0) != 0,
+                files: (row["perm_files"]?.asInt ?? 0) != 0,
+                console: (row["perm_console"]?.asInt ?? 0) != 0
+            )
+        }
+        return result
+    }
+
+    /// Builds the per-request authorization engine for a user.
+    public func authorizationEngine(for user: PanelUser) throws -> AuthorizationEngine {
+        AuthorizationEngine(isAdmin: user.isAdmin, grants: user.isAdmin ? [:] : (try grants(forUserID: user.id)))
+    }
+
+    // MARK: Sessions (tokens are stored hashed; the raw token lives only in the cookie)
+
+    public func insertSession(tokenHash: String, userID: Int64, expiresAt: String) throws {
+        try db.run(
+            "INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)",
+            [.text(tokenHash), .integer(userID), .text(expiresAt)]
+        )
+    }
+
+    public func sessionUser(tokenHash: String, now: String) throws -> PanelUser? {
+        let rows = try db.query("""
+            SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
+            WHERE s.token_hash = ? AND s.expires_at > ?
+            """, [.text(tokenHash), .text(now)])
+        return rows.first.map(Self.userFromRow)
+    }
+
+    public func deleteSession(tokenHash: String) throws {
+        try db.run("DELETE FROM sessions WHERE token_hash = ?", [.text(tokenHash)])
+    }
+
+    public func deleteExpiredSessions(now: String) throws {
+        try db.run("DELETE FROM sessions WHERE expires_at <= ?", [.text(now)])
+    }
+
+    // MARK: Audit
+
+    public func recordAudit(
+        username: String, action: String, containerName: String?,
+        outcome: String, sourceIP: String?, detail: String? = nil
+    ) throws {
+        try db.run("""
+            INSERT INTO audit (username, action, container_name, outcome, source_ip, detail)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [.text(username), .text(action),
+             containerName.map(SQLValue.text) ?? .null,
+             .text(outcome),
+             sourceIP.map(SQLValue.text) ?? .null,
+             detail.map(SQLValue.text) ?? .null]
+        )
+    }
+
+    public func listAudit(limit: Int = 500) throws -> [AuditEntry] {
+        try db.query("SELECT * FROM audit ORDER BY id DESC LIMIT ?", [.integer(Int64(limit))]).map { row in
+            AuditEntry(
+                id: row["id"]?.asInt ?? 0,
+                timestamp: row["ts"]?.asString ?? "",
+                username: row["username"]?.asString ?? "",
+                action: row["action"]?.asString ?? "",
+                containerName: row["container_name"]?.asString,
+                outcome: row["outcome"]?.asString ?? "",
+                sourceIP: row["source_ip"]?.asString,
+                detail: row["detail"]?.asString
+            )
+        }
+    }
+}

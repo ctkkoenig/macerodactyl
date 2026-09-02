@@ -1,0 +1,20 @@
+// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "MacerodactylKit",
+    platforms: [.macOS(.v15)],
+    products: [
+        .library(name: "MacerodactylKit", targets: ["MacerodactylKit"])
+    ],
+    targets: [
+        .target(
+            name: "MacerodactylKit",
+            linkerSettings: [.linkedLibrary("sqlite3")]
+        ),
+        .testTarget(
+            name: "MacerodactylKitTests",
+            dependencies: ["MacerodactylKit"]
+        ),
+    ]
+)
