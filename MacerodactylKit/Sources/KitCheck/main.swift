@@ -126,6 +126,40 @@ case "rcon":
         }
     }
 
+case "files":
+    // kitcheck files NAME list|read DIR/PATH  or  kitcheck files NAME write PATH TEXT
+    guard arguments.count >= 4 else { print("usage: kitcheck files NAME list|read|write PATH [TEXT]"); exit(64) }
+    let name = arguments[2]
+    let output = try await cli.run(["ps", "-a", "--no-trunc", "--format", "{{json .}}"], timeout: .seconds(15))
+    guard let container = DockerPSParser.parse(output).first(where: { $0.name == name }) else {
+        print("no container named \(name)")
+        exit(1)
+    }
+    guard let service = FileService(container: container, stacksRoot: AppSettings.stacksRoot) else {
+        print("file access: UNAVAILABLE (no stack folder under the stacks root) — UI shows the explanation, not a broken tab")
+        exit(0)
+    }
+    do {
+        switch arguments[3] {
+        case "list":
+            for entry in try service.list(arguments.count > 4 ? arguments[4] : "") {
+                print("\(entry.isDirectory ? "dir " : "file") \(entry.relativePath) (\(entry.sizeBytes)b)")
+            }
+        case "read":
+            let content = try service.read(arguments[4])
+            print("read ok (\(content.lineEnding.rawValue)):\n\(content.text.prefix(300))")
+        case "write":
+            try service.write(arguments[4], text: arguments.count > 5 ? arguments[5] + "\n" : "test\n", lineEnding: .lf)
+            print("write ok")
+        default:
+            print("unknown files op")
+            exit(64)
+        }
+    } catch {
+        print("REFUSED: \(error)")
+        exit(4)
+    }
+
 case nil:
     await listContainers()
 

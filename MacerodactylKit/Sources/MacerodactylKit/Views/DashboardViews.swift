@@ -94,24 +94,41 @@ struct SidebarView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if let logo = Brand.longLogo {
-                Image(nsImage: logo)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxHeight: 34)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .padding(10)
-                    .frame(maxWidth: .infinity)
-            }
+            WordmarkFooter()
         }
     }
 }
 
 /// Branding assets bundled with the Kit (also served by the web panel later).
+/// Two wordmarks ship: the light one for dark backgrounds, the dark one for
+/// light backgrounds — pick by current appearance, never hope one fits both.
 public enum Brand {
-    public static let longLogo: NSImage? = Bundle.module
-        .url(forResource: "logo-long", withExtension: "png")
-        .flatMap { NSImage(contentsOf: $0) }
+    public static let wordmarkLight: NSImage? = load("wordmark-light")
+    public static let wordmarkDark: NSImage? = load("wordmark-dark")
+
+    public static func wordmark(for colorScheme: ColorScheme) -> NSImage? {
+        colorScheme == .dark ? wordmarkLight : wordmarkDark
+    }
+
+    private static func load(_ name: String) -> NSImage? {
+        Bundle.module.url(forResource: name, withExtension: "png").flatMap { NSImage(contentsOf: $0) }
+    }
+}
+
+struct WordmarkFooter: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        if let wordmark = Brand.wordmark(for: colorScheme) {
+            Image(nsImage: wordmark)
+                .resizable()
+                .scaledToFit()
+                .frame(maxHeight: 22)
+                .padding(.vertical, 10)
+                .padding(.horizontal, 14)
+                .frame(maxWidth: .infinity)
+        }
+    }
 }
 
 struct StackHeaderView: View {

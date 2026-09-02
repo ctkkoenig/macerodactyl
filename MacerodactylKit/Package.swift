@@ -11,7 +11,10 @@ let package = Package(
     targets: [
         .target(
             name: "MacerodactylKit",
-            resources: [.copy("Resources/logo-long.png")],
+            resources: [
+                .copy("Resources/wordmark-light.png"),
+                .copy("Resources/wordmark-dark.png"),
+            ],
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .executableTarget(
