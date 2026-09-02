@@ -1,9 +1,11 @@
+import AppKit
 import SwiftUI
 import MacerodactylKit
 import MacerodactylPanel
 
 @main
 struct MacerodactylApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store = ContainerStore()
     @State private var panel: AppPanel
 
@@ -47,6 +49,30 @@ struct MacerodactylApp: App {
                 name: container.name,
                 filesGrantable: PathConfinement.fileRoot(for: container, stacksRoot: AppSettings.stacksRoot) != nil
             )
+        }
+    }
+}
+
+/// Enforces a single running instance. macOS only dedupes GUI (LaunchServices)
+/// launches; a binary launched directly — by Xcode, a script, or a second
+/// double-click racing the first — is a separate process. On startup we look
+/// for an already-running instance of the same bundle and, if one exists, bring
+/// it to the front and quit ourselves, so the app can never pile up.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        let current = NSRunningApplication.current
+        let bundleID = current.bundleIdentifier ?? "com.macerodactyl.app"
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { $0.processIdentifier != current.processIdentifier && !$0.isTerminated }
+        // If another instance is already up, defer to it and exit. Comparing
+        // launch dates makes the race deterministic: the earlier one survives.
+        let earlierExists = others.contains { other in
+            guard let theirs = other.launchDate, let mine = current.launchDate else { return true }
+            return theirs <= mine
+        }
+        if earlierExists {
+            others.first?.activate(options: [.activateAllWindows])
+            exit(0)
         }
     }
 }

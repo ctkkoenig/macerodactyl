@@ -1,239 +1,162 @@
 import SwiftUI
 
-/// Root of the native UI. Owns the store; the app target just instantiates this.
+/// Root of the native UI. A NavigationStack whose root is the stack-grouped
+/// container landing (the Pterodactyl "server list"); selecting a container
+/// pushes its workspace. Owns the shared store and the stats coordinator.
 public struct DashboardRootView: View {
     @State private var store: ContainerStore
-    @State private var selectedContainerID: String?
+    @State private var stats: StatsCoordinator
+    @State private var path: [String] = []   // container IDs
 
     public init(store: ContainerStore = ContainerStore()) {
+        let store = store
         _store = State(initialValue: store)
+        _stats = State(initialValue: StatsCoordinator(cli: { store.cli }))
     }
 
     public var body: some View {
-        Group {
-            switch store.availability {
-            case .binaryNotFound:
-                DockerBinaryMissingView(store: store)
-            default:
-                dashboard
-            }
+        NavigationStack(path: $path) {
+            landingRoot
+                .navigationDestination(for: String.self) { id in
+                    if let container = store.groups.all.first(where: { $0.id == id }) {
+                        ContainerWorkspaceView(store: store, stats: stats, container: container)
+                    } else {
+                        ContentUnavailableView("Container gone", systemImage: "shippingbox",
+                            description: Text("This container no longer exists."))
+                    }
+                }
         }
-        .frame(minWidth: 760, minHeight: 460)
+        .frame(minWidth: 820, minHeight: 560)
         .task {
             store.startPolling()
             await store.refreshAdvisories()
         }
         .onReceive(NotificationCenter.default.publisher(for: .macerodactylSettingsChanged)) { _ in
             store.resolveBinary()
-            Task {
-                await store.refresh()
-                store.startPolling(interval: AppSettings.refreshInterval)
-            }
+            Task { await store.refresh(); store.startPolling(interval: AppSettings.refreshInterval) }
         }
     }
 
-    private var dashboard: some View {
-        NavigationSplitView {
-            SidebarView(store: store, selectedContainerID: $selectedContainerID)
-                .navigationSplitViewColumnWidth(min: 230, ideal: 270)
-        } detail: {
-            if let container = store.groups.all.first(where: { $0.id == selectedContainerID }) {
-                ContainerDetailView(store: store, container: container)
-            } else if store.availability == .daemonDown {
-                DaemonDownView(store: store)
-            } else if !store.advisories.isEmpty {
-                AdvisoryListView(advisories: store.advisories)
-            } else {
-                ContentUnavailableView(
-                    "Select a container",
-                    systemImage: "shippingbox",
-                    description: Text("Pick a container from the sidebar to inspect and control it.")
-                )
-            }
+    @ViewBuilder
+    private var landingRoot: some View {
+        switch store.availability {
+        case .binaryNotFound:
+            DockerBinaryMissingView(store: store)
+        default:
+            StacksLandingView(store: store, stats: stats, path: $path)
         }
+    }
+}
+
+/// The landing: container cards grouped by stack + an Unmanaged group, in a
+/// resize-aware grid. This is the top level you always return to.
+struct StacksLandingView: View {
+    let store: ContainerStore
+    let stats: StatsCoordinator
+    @Binding var path: [String]
+
+    private let columns = [GridItem(.adaptive(minimum: 240, maximum: 360), spacing: 14)]
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 22) {
+                ForEach(store.groups.stacks) { stack in
+                    VStack(alignment: .leading, spacing: 12) {
+                        StackHeader(store: store, stack: stack)
+                        grid(stack.containers)
+                    }
+                }
+                if !store.groups.unmanaged.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        sectionLabel("Unmanaged")
+                        grid(store.groups.unmanaged)
+                    }
+                }
+            }
+            .padding(20)
+        }
+        .background(.background)
+        .navigationTitle("Containers")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button("Refresh", systemImage: "arrow.clockwise") {
-                    Task { await store.refresh() }
+                Button("Refresh", systemImage: "arrow.clockwise") { Task { await store.refresh() } }
+            }
+        }
+        .overlay { emptyOrDaemonState }
+        .task {
+            stats.startSnapshotPolling()
+        }
+        .onDisappear { stats.stopSnapshotPolling() }
+    }
+
+    private func grid(_ containers: [DockerContainer]) -> some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+            ForEach(containers) { container in
+                Button {
+                    path.append(container.id)
+                } label: {
+                    ContainerCard(
+                        container: container,
+                        stats: stats.stats(for: container.name),
+                        statsAvailable: stats.snapshotAvailable,
+                        busy: store.busyContainerIDs.contains(container.id)
+                    )
                 }
-                .help("Refresh now")
+                .buttonStyle(.plain)
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if let error = store.lastError {
-                ErrorBanner(message: error) { store.clearError() }
+    }
+
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.title3.weight(.semibold))
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var emptyOrDaemonState: some View {
+        if store.availability == .daemonDown {
+            DaemonDownView(store: store)
+                .background(.background)
+        } else if store.groups.isEmpty && store.availability == .ready {
+            if store.advisories.contains(where: { $0.id == "stacks-missing" }) {
+                AdvisoryListView(advisories: store.advisories)
+            } else {
+                ContentUnavailableView("No containers", systemImage: "shippingbox",
+                    description: Text("Compose stacks and docker run containers both appear here once they exist."))
             }
         }
     }
 }
 
-struct SidebarView: View {
-    let store: ContainerStore
-    @Binding var selectedContainerID: String?
-
-    var body: some View {
-        List(selection: $selectedContainerID) {
-            if store.availability == .daemonDown {
-                Label("Docker isn't running", systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(store.groups.stacks) { stack in
-                Section {
-                    ForEach(stack.containers) { container in
-                        ContainerRowView(store: store, container: container)
-                            .tag(container.id)
-                    }
-                } header: {
-                    StackHeaderView(store: store, stack: stack)
-                }
-            }
-            if !store.groups.unmanaged.isEmpty {
-                Section("Unmanaged") {
-                    ForEach(store.groups.unmanaged) { container in
-                        ContainerRowView(store: store, container: container)
-                            .tag(container.id)
-                    }
-                }
-            }
-        }
-        .overlay {
-            if store.groups.isEmpty && store.availability == .ready {
-                ContentUnavailableView(
-                    "No containers",
-                    systemImage: "shippingbox",
-                    description: Text("Nothing is defined yet. Compose stacks and docker run containers both show up here.")
-                )
-            }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            WordmarkFooter()
-        }
-    }
-}
-
-/// Branding assets bundled with the Kit (also served by the web panel later).
-/// Two wordmarks ship: the light one for dark backgrounds, the dark one for
-/// light backgrounds — pick by current appearance, never hope one fits both.
-public enum Brand {
-    public static let wordmarkLight: NSImage? = load("wordmark-light")
-    public static let wordmarkDark: NSImage? = load("wordmark-dark")
-
-    public static func wordmark(for colorScheme: ColorScheme) -> NSImage? {
-        colorScheme == .dark ? wordmarkLight : wordmarkDark
-    }
-
-    private static func load(_ name: String) -> NSImage? {
-        Bundle.module.url(forResource: name, withExtension: "png").flatMap { NSImage(contentsOf: $0) }
-    }
-}
-
-struct WordmarkFooter: View {
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        if let wordmark = Brand.wordmark(for: colorScheme) {
-            Image(nsImage: wordmark)
-                .resizable()
-                .scaledToFit()
-                .frame(maxHeight: 22)
-                .padding(.vertical, 10)
-                .padding(.horizontal, 14)
-                .frame(maxWidth: .infinity)
-        }
-    }
-}
-
-struct StackHeaderView: View {
+struct StackHeader: View {
     let store: ContainerStore
     let stack: ContainerStack
 
     var body: some View {
         HStack {
             Text(stack.name)
-            Spacer()
-            Text("\(stack.runningCount)/\(stack.containers.count)")
-                .font(.caption)
+                .font(.title3.weight(.semibold))
+            Text("\(stack.runningCount)/\(stack.containers.count) running")
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
+            Spacer()
             Menu {
                 Button("Start stack") { run(.start) }
                 Button("Stop stack") { run(.stop) }
                 Button("Restart stack") { run(.restart) }
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Label("Stack actions", systemImage: "ellipsis.circle")
+                    .labelStyle(.iconOnly)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func run(_ action: ContainerStore.PowerAction) {
         Task { try? await store.perform(action, on: stack) }
-    }
-}
-
-struct ContainerRowView: View {
-    let store: ContainerStore
-    let container: DockerContainer
-
-    var body: some View {
-        HStack(spacing: 8) {
-            StatusDot(container: container)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(container.name)
-                    .lineLimit(1)
-                Text(container.status)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-            if store.busyContainerIDs.contains(container.id) {
-                ProgressView()
-                    .controlSize(.small)
-            }
-        }
-        .contextMenu {
-            if container.isRunning {
-                Button("Stop") { run(.stop) }
-                Button("Restart") { run(.restart) }
-            } else {
-                Button("Start") { run(.start) }
-            }
-        }
-    }
-
-    private func run(_ action: ContainerStore.PowerAction) {
-        Task { try? await store.perform(action, on: container) }
-    }
-}
-
-struct StatusDot: View {
-    let container: DockerContainer
-
-    var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: 9, height: 9)
-            .help(helpText)
-    }
-
-    private var color: Color {
-        switch (container.state, container.health) {
-        case (.running, .unhealthy): .orange
-        case (.running, .starting): .yellow
-        case (.running, _): .green
-        case (.paused, _): .yellow
-        case (.restarting, _): .yellow
-        default: .secondary.opacity(0.5)
-        }
-    }
-
-    private var helpText: String {
-        if let health = container.health {
-            "\(container.state.rawValue) (\(health.rawValue))"
-        } else {
-            container.state.rawValue
-        }
     }
 }
 
@@ -242,18 +165,15 @@ struct DaemonDownView: View {
 
     var body: some View {
         ContentUnavailableView {
-            Label("Docker isn't running", systemImage: "exclamationmark.triangle")
+            Label("Docker isn’t running", systemImage: "exclamationmark.triangle")
         } description: {
-            Text("Start Docker Desktop (or whichever Docker provider you use), then try again. Macerodactyl never starts the daemon or your containers itself.")
+            Text("Start Docker Desktop (or your Docker provider) and wait for it to finish launching. Macerodactyl never starts the daemon or your containers itself.")
         } actions: {
-            Button("Check again") {
-                Task { await store.refresh() }
-            }
+            Button("Check again") { Task { await store.refresh() } }
         }
     }
 }
 
-/// Shown when no docker binary exists at any known location.
 struct DockerBinaryMissingView: View {
     let store: ContainerStore
     @State private var overridePath: String = AppSettings.dockerPathOverride ?? ""
@@ -262,13 +182,12 @@ struct DockerBinaryMissingView: View {
         ContentUnavailableView {
             Label("Docker CLI not found", systemImage: "questionmark.folder")
         } description: {
-            Text("Looked in ~/.orbstack/bin, /opt/homebrew/bin, and /usr/local/bin. If docker lives somewhere else, point Macerodactyl at it.")
+            Text("Looked in ~/.orbstack/bin, /opt/homebrew/bin, and /usr/local/bin. If docker lives elsewhere, point Macerodactyl at it.")
         } actions: {
             HStack {
                 TextField("Path to docker binary", text: $overridePath)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 280)
-                Button("Browse…") { browse() }
                 Button("Use this path") {
                     AppSettings.dockerPathOverride = overridePath
                     store.resolveBinary()
@@ -278,19 +197,9 @@ struct DockerBinaryMissingView: View {
             }
         }
     }
-
-    private func browse() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.showsHiddenFiles = true
-        if panel.runModal() == .OK, let url = panel.url {
-            overridePath = url.path
-        }
-    }
 }
 
-/// Renders cold-start advisories so an unusual environment explains itself.
+/// Cold-start advisories (unchanged behavior).
 struct AdvisoryListView: View {
     let advisories: [StartupAdvisory]
 
@@ -315,40 +224,13 @@ struct AdvisoryListView: View {
             }
             .padding(20)
         }
+        .background(.background)
     }
 
-    private func icon(_ severity: StartupAdvisory.Severity) -> String {
-        switch severity {
-        case .blocking: "exclamationmark.octagon.fill"
-        case .degraded: "exclamationmark.triangle.fill"
-        case .info: "info.circle.fill"
-        }
+    private func icon(_ s: StartupAdvisory.Severity) -> String {
+        switch s { case .blocking: "exclamationmark.octagon.fill"; case .degraded: "exclamationmark.triangle.fill"; case .info: "info.circle.fill" }
     }
-
-    private func color(_ severity: StartupAdvisory.Severity) -> Color {
-        switch severity {
-        case .blocking: .red
-        case .degraded: .orange
-        case .info: .blue
-        }
-    }
-}
-
-struct ErrorBanner: View {
-    let message: String
-    let dismiss: () -> Void
-
-    var body: some View {
-        HStack {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.yellow)
-            Text(message)
-                .lineLimit(2)
-            Spacer()
-            Button("Dismiss", action: dismiss)
-                .buttonStyle(.borderless)
-        }
-        .padding(10)
-        .background(.bar)
+    private func color(_ s: StartupAdvisory.Severity) -> Color {
+        switch s { case .blocking: .red; case .degraded: .orange; case .info: .blue }
     }
 }

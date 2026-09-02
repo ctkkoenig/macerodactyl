@@ -111,6 +111,14 @@ final class FilesModel {
         openFile(openPath)
     }
 
+    func closeFile() {
+        openPath = nil
+        editorText = ""
+        savedText = ""
+        fileMessage = nil
+        externallyChanged = false
+    }
+
     func checkExternalChange() {
         guard let openPath, fileMessage == nil else { return }
         let current = service.modificationDate(openPath)
@@ -152,162 +160,147 @@ final class FilesModel {
     }
 }
 
+/// Pterodactyl-style file manager: a clickable breadcrumb path, a table of
+/// name / size / modified with per-row actions, and full-page editing (the
+/// filename in the breadcrumb, an explicit Save). Confinement and the 2 MB /
+/// binary refusals come from FileService — this is only presentation.
 struct FilesBrowserView: View {
     @State var model: FilesModel
+    @State private var selection: FileService.Entry.ID?
 
     var body: some View {
-        HSplitView {
-            browser
-                .frame(minWidth: 220, idealWidth: 260, maxWidth: 400)
-            editorPane
-                .frame(minWidth: 320, maxWidth: .infinity)
-        }
-    }
-
-    // MARK: Browser column
-
-    private var browser: some View {
         VStack(spacing: 0) {
             breadcrumb
             Divider()
             if let listError = model.listError {
-                ContentUnavailableView("Can't list folder", systemImage: "exclamationmark.triangle", description: Text(listError))
+                ContentUnavailableView("Can’t list folder", systemImage: "exclamationmark.triangle",
+                                       description: Text(listError))
             } else {
-                List(model.entries) { entry in
-                    entryRow(entry)
-                }
-                .listStyle(.inset)
+                table
             }
+        }
+        .sheet(isPresented: Binding(get: { model.openPath != nil }, set: { if !$0 { model.closeFile() } })) {
+            FileEditorView(model: model)
         }
     }
 
     private var breadcrumb: some View {
-        HStack(spacing: 4) {
-            Button {
-                model.loadDirectory("")
-            } label: {
-                Image(systemName: "folder")
-            }
-            .buttonStyle(.borderless)
-            let parts = model.currentDirectory.split(separator: "/").map(String.init)
-            ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
-                Text("/").foregroundStyle(.tertiary)
-                Button(part) {
-                    model.loadDirectory(parts[0...index].joined(separator: "/"))
-                }
+        let parts = model.currentDirectory.split(separator: "/").map(String.init)
+        return HStack(spacing: 4) {
+            Button { model.loadDirectory("") } label: { Image(systemName: "house") }
                 .buttonStyle(.borderless)
+            ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
+                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                Button(part) { model.loadDirectory(parts[0...index].joined(separator: "/")) }
+                    .buttonStyle(.borderless)
             }
             Spacer()
-            Button {
-                NSWorkspace.shared.activateFileViewerSelecting([
-                    model.service.root.appending(path: model.currentDirectory),
-                ])
-            } label: {
-                Image(systemName: "arrow.up.forward.app")
+            Button("Open in Finder", systemImage: "arrow.up.forward.app") {
+                NSWorkspace.shared.activateFileViewerSelecting([model.service.root.appending(path: model.currentDirectory)])
             }
             .buttonStyle(.borderless)
+            .labelStyle(.iconOnly)
             .help("Open in Finder")
         }
-        .font(.callout)
-        .lineLimit(1)
-        .padding(8)
+        .padding(10)
     }
 
-    @ViewBuilder
-    private func entryRow(_ entry: FileService.Entry) -> some View {
-        Button {
-            if entry.isDirectory {
-                model.loadDirectory(entry.relativePath)
-            } else {
-                model.openFile(entry.relativePath)
-            }
-        } label: {
-            HStack {
-                Image(systemName: entry.isDirectory ? "folder.fill" : "doc.text")
-                    .foregroundStyle(entry.isDirectory ? Color.accentColor : .secondary)
-                Text(entry.name)
-                    .lineLimit(1)
-                Spacer()
-                if !entry.isDirectory {
-                    Text(ByteCountFormatter.string(fromByteCount: Int64(entry.sizeBytes), countStyle: .file))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+    private var table: some View {
+        Table(model.entries, selection: $selection) {
+            TableColumn("Name") { entry in
+                HStack(spacing: 6) {
+                    Image(systemName: entry.isDirectory ? "folder.fill" : "doc.text")
+                        .foregroundStyle(entry.isDirectory ? Color.accentColor : .secondary)
+                    Text(entry.name)
                 }
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { open(entry) }
             }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(entry.relativePath == model.openPath ? Color.accentColor.opacity(0.12) : nil)
-    }
-
-    // MARK: Editor pane
-
-    @ViewBuilder
-    private var editorPane: some View {
-        if let openPath = model.openPath {
-            VStack(spacing: 0) {
-                editorHeader(openPath)
-                Divider()
-                if model.externallyChanged {
-                    externalChangeBanner
-                    Divider()
-                }
-                if let message = model.fileMessage {
-                    ContentUnavailableView("Can't edit this file", systemImage: "doc.questionmark", description: Text(message))
+            TableColumn("Size") { entry in
+                Text(entry.isDirectory ? "—" : ByteCountFormatter.string(fromByteCount: Int64(entry.sizeBytes), countStyle: .file))
+                    .foregroundStyle(.secondary).monospacedDigit()
+            }
+            .width(90)
+            TableColumn("Modified") { entry in
+                Text(entry.modified.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "—")
+                    .foregroundStyle(.secondary)
+            }
+            .width(160)
+            TableColumn("") { entry in
+                if entry.isDirectory {
+                    Button("Open") { open(entry) }.buttonStyle(.borderless)
                 } else {
-                    TextEditor(text: $model.editorText)
-                        .font(.system(size: 12.5, design: .monospaced))
-                        .autocorrectionDisabled()
-                        .scrollContentBackground(.hidden)
-                        .background(Color(nsColor: .textBackgroundColor))
-                        .task(id: openPath) {
-                            while !Task.isCancelled {
-                                try? await Task.sleep(for: .seconds(2))
-                                model.checkExternalChange()
-                            }
-                        }
+                    Button("Edit") { open(entry) }.buttonStyle(.borderless)
                 }
             }
-        } else {
-            ContentUnavailableView(
-                "Select a file",
-                systemImage: "doc.text",
-                description: Text("Pick a text file on the left to view and edit it.")
-            )
+            .width(60)
+        }
+        .contextMenu(forSelectionType: FileService.Entry.ID.self) { _ in } primaryAction: { ids in
+            if let id = ids.first, let entry = model.entries.first(where: { $0.id == id }) { open(entry) }
         }
     }
 
-    private func editorHeader(_ openPath: String) -> some View {
+    private func open(_ entry: FileService.Entry) {
+        if entry.isDirectory { model.loadDirectory(entry.relativePath) }
+        else { model.openFile(entry.relativePath) }
+    }
+}
+
+/// Full-page editor presented over the file manager: filename in the header
+/// (the breadcrumb equivalent), an explicit Save, external-change handling.
+struct FileEditorView: View {
+    @Bindable var model: FilesModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            if model.externallyChanged { externalBanner; Divider() }
+            if let message = model.fileMessage {
+                ContentUnavailableView("Can’t edit this file", systemImage: "doc.questionmark",
+                                       description: Text(message))
+            } else {
+                TextEditor(text: $model.editorText)
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .autocorrectionDisabled()
+                    .scrollContentBackground(.hidden)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .task(id: model.openPath) {
+                        while !Task.isCancelled {
+                            try? await Task.sleep(for: .seconds(2))
+                            model.checkExternalChange()
+                        }
+                    }
+            }
+        }
+        .frame(minWidth: 560, minHeight: 480)
+    }
+
+    private var header: some View {
         HStack(spacing: 8) {
             if model.isDirty {
-                Circle().fill(Color.accentColor).frame(width: 7, height: 7)
-                    .help("Unsaved changes")
+                Circle().fill(Color.accentColor).frame(width: 7, height: 7).help("Unsaved changes")
             }
-            Text(openPath)
-                .font(.callout.monospaced())
-                .lineLimit(1)
-                .truncationMode(.head)
+            Text(model.openPath ?? "").font(.callout.monospaced()).lineLimit(1).truncationMode(.head)
             Spacer()
-            Button("Revert") { model.revert() }
-                .disabled(!model.isDirty)
+            Button("Revert") { model.revert() }.disabled(!model.isDirty)
             Button("Save") { model.save() }
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(!model.isDirty || model.fileMessage != nil)
                 .buttonStyle(.borderedProminent)
+            Button("Close") { dismiss() }
         }
-        .controlSize(.small)
-        .padding(8)
+        .padding(10)
     }
 
-    private var externalChangeBanner: some View {
+    private var externalBanner: some View {
         HStack {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.yellow)
-            Text("This file changed on disk while you were editing.")
-                .font(.callout)
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+            Text("This file changed on disk while you were editing.").font(.callout)
             Spacer()
-            Button("Reload from disk") { model.reloadFromDisk() }
-            Button("Keep my version") { model.keepMineDespiteExternalChange() }
+            Button("Reload") { model.reloadFromDisk() }
+            Button("Keep mine") { model.keepMineDespiteExternalChange() }
         }
         .controlSize(.small)
         .padding(8)
