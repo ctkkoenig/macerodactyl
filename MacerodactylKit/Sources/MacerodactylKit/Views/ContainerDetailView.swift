@@ -5,6 +5,7 @@ struct ContainerDetailView: View {
         case overview = "Overview"
         case logs = "Logs"
         case console = "Console"
+        case files = "Files"
     }
 
     let store: ContainerStore
@@ -35,6 +36,9 @@ struct ContainerDetailView: View {
             case .console:
                 ConsoleView(store: store, container: container)
                     .id(container.id)
+            case .files:
+                FilesView(store: store, container: container)
+                    .id(container.id)
             }
         }
         .navigationTitle(container.name)
@@ -46,9 +50,6 @@ struct ContainerDetailView: View {
                 header
                 actions
                 overview
-                Text("File editing arrives in the next phase.")
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
