@@ -44,35 +44,10 @@ jobs:
             grep -E 'error:|BUILD (SUCCEEDED|FAILED)' || true
           test -d .ci-dd/Build/Products/Debug/Macerodactyl.app
 
-  integration:
-    name: End-to-end against real Docker
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-      - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-      - name: Start a real Docker daemon (colima)
-        run: |
-          brew install colima docker
-          colima start --cpu 2 --memory 4 --disk 10
-          docker version
-      - name: Bring up a throwaway container
-        run: |
-          docker run -d --name ci-fixture alpine sh -c 'while true; do echo tick; sleep 1; done'
-          docker ps
-      - name: Exercise the docker-CLI core end-to-end (kitcheck)
-        working-directory: MacerodactylKit
-        run: |
-          # list + group containers through the app's real code path
-          swift run kitcheck
-          # stream logs briefly and assert the docker process is torn down (no leak)
-          swift run kitcheck logs ci-fixture 3
-          # one-shot + streamed stats, then teardown check
-          swift run kitcheck stats ci-fixture
-          # a line-based exec console command
-          swift run kitcheck exec ci-fixture 'echo hello from $(hostname)'
-      - name: Tear down
-        if: always()
-        run: docker rm -f ci-fixture || true
+  # NOTE: real-Docker end-to-end integration is NOT possible on GitHub-hosted
+  # macOS runners — they are themselves VMs and forbid nested virtualization, so
+  # colima/Docker Desktop cannot start a VM (empirically confirmed: "error
+  # starting vm"). Ubuntu runners have Docker natively, but the panel core does
+  # not yet build on Linux. The integration job is added on a Linux runner in
+  # Tier 4, once `macerodactyld` + the Kit core build headless on Linux; it will
+  # run the daemon against real dockerd and curl the panel end-to-end.
