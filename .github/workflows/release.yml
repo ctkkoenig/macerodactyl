@@ -1,0 +1,67 @@
+# Release workflow — PREPARED, NOT WIRED TO PUBLISH ANYTHING AUTOMATICALLY.
+#
+# It runs only when you push a tag like `v0.1.0` (or trigger it by hand), and it
+# creates a **draft** GitHub release you review and publish yourself. Nothing is
+# published without a human pushing a tag and clicking "publish" on the draft.
+#
+# Signing/notarization: CI has no Apple Developer account, so the app is built
+# ad-hoc-signed and is NOT notarized — the zip here is a convenience artifact, not
+# a Gatekeeper-approved install. The supported install path stays "build from
+# source with your own team" (see the README). If you add signing secrets
+# (BUILD_CERTIFICATE_BASE64, etc.) and a notarization step, this is where they go.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version (e.g. 0.1.0)"
+        required: true
+
+permissions:
+  contents: write # to create the draft release
+
+jobs:
+  macos-app:
+    name: Build the macOS app artifact
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Resolve version
+        id: v
+        run: echo "version=${GITHUB_REF_NAME#v}${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+      - name: Build (ad-hoc signed, unnotarized)
+        run: |
+          xcodebuild -project Macerodactyl.xcodeproj -scheme Macerodactyl \
+            -configuration Release -derivedDataPath .dd \
+            build CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=NO
+      - name: Zip the app
+        run: |
+          APP=.dd/Build/Products/Release/Macerodactyl.app
+          test -d "$APP"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "Macerodactyl-${{ steps.v.outputs.version }}.zip"
+      - name: Create a DRAFT release with the artifact
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true # never auto-published; you review and publish it
+          name: "Macerodactyl ${{ steps.v.outputs.version }}"
+          body: |
+            Unsigned/un-notarized convenience build. The supported install path is
+            building from source with your own Apple ID team (see the README).
+          files: Macerodactyl-${{ steps.v.outputs.version }}.zip
+
+  # Optional: build (do NOT push) the Linux panel image, as a smoke check that the
+  # release also produces a working server image. Pushing to a registry is left to
+  # you — add a login + push step with your own credentials when you want it.
+  linux-image:
+    name: Build the Linux panel image (no push)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t macerodactyl-panel:${GITHUB_REF_NAME#v} .
