@@ -39,3 +39,8 @@ Append-only. Newest at bottom. Each entry: date, item, what I did, decisions
 - Cleaned up ALL scratch launchd test agents (bootout) and temporary probe target; no persistent LaunchAgent left in ~/Library/LaunchAgents.
 
 - Additional ruling-out: a Network.framework-only Swift binary runs fine under launchd here, so Network is NOT the blocker. It's something in the statically-linked NIO/Hummingbird/service-lifecycle stack's early init. Not root-caused; moving on per the "document and skip" rule. Added a `PanelTool daemon` CLI (install/uninstall/status) so the owner can manage/verify the daemon manually.
+
+## 2026-09-02 — Tier 1.2 rate-limiter → SQLite (done)
+- Schema v3 adds `rate_limits` (key, failures, blocked_until). `PanelDataStore` gains get/set/clear/prune. `LoginRateLimiter` refactored behind a `RateLimitStore` protocol with `InMemoryRateLimitStore` (existing fast tests, unchanged) and `SQLiteRateLimitStore` (production). PanelServer now uses the SQLite store, so both the in-process GUI server and the daemon persist throttling (same panel.sqlite, WAL = multi-process safe).
+- Verified with a real-SQLite persistence test: lock out an account, open a NEW store on the SAME file ("restart"), lockout still in effect; recordSuccess clears it persistently. Kept all prior rate-limiter tests. 141 tests.
+- Chose the protocol-backend split over rewriting the limiter so the tested backoff math and the fast in-memory tests stay intact.

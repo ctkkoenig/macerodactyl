@@ -114,7 +114,7 @@ public final class Database: @unchecked Sendable {
 /// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
 /// scoping, and audit never have to be retrofitted into the data model.
 public enum PanelSchema {
-    public static let currentVersion = 2
+    public static let currentVersion = 3
 
     public static func migrate(_ db: Database) throws {
         if db.userVersion < 1 {
@@ -160,6 +160,19 @@ public enum PanelSchema {
             // Existing grants default to no schedule access.
             try db.execute("ALTER TABLE grants ADD COLUMN perm_schedules INTEGER NOT NULL DEFAULT 0")
             db.userVersion = 2
+        }
+        if db.userVersion < 3 {
+            // Persist failed-login throttling so a restart isn't a brute-force
+            // reset. Keyed by "acct:<username>" and "ip:<addr>".
+            try db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS rate_limits (
+                    key TEXT PRIMARY KEY,
+                    failures INTEGER NOT NULL DEFAULT 0,
+                    blocked_until TEXT
+                );
+                """)
+            db.userVersion = 3
         }
     }
 }
@@ -343,5 +356,41 @@ public final class PanelDataStore: Sendable {
                 detail: row["detail"]?.asString
             )
         }
+    }
+
+    // MARK: Rate limiting (persisted so a restart isn't a brute-force reset)
+
+    public struct RateLimitRow: Sendable, Equatable {
+        public let failures: Int
+        public let blockedUntilISO: String?
+        public init(failures: Int, blockedUntilISO: String?) {
+            self.failures = failures
+            self.blockedUntilISO = blockedUntilISO
+        }
+    }
+
+    public func rateLimit(key: String) throws -> RateLimitRow? {
+        try db.query("SELECT failures, blocked_until FROM rate_limits WHERE key = ?", [.text(key)])
+            .first
+            .map { RateLimitRow(failures: Int($0["failures"]?.asInt ?? 0), blockedUntilISO: $0["blocked_until"]?.asString) }
+    }
+
+    public func setRateLimit(key: String, failures: Int, blockedUntilISO: String?) throws {
+        try db.run(
+            """
+            INSERT INTO rate_limits (key, failures, blocked_until) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET failures=excluded.failures, blocked_until=excluded.blocked_until
+            """,
+            [.text(key), .integer(Int64(failures)), blockedUntilISO.map(SQLValue.text) ?? .null])
+    }
+
+    public func clearRateLimit(key: String) throws {
+        try db.run("DELETE FROM rate_limits WHERE key = ?", [.text(key)])
+    }
+
+    /// Housekeeping: drop rows whose lockout has fully elapsed and which have no
+    /// standing failure count worth keeping. Safe to call periodically.
+    public func pruneRateLimits(olderThanISO: String) throws {
+        try db.run("DELETE FROM rate_limits WHERE blocked_until IS NOT NULL AND blocked_until <= ?", [.text(olderThanISO)])
     }
 }

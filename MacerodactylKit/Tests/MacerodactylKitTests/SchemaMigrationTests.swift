@@ -94,3 +94,26 @@ import Testing
         #expect(ContainerPermission.allCases.contains(.schedules))
     }
 }
+
+@Suite struct RateLimitSchemaTests {
+    @Test func migrationAddsRateLimitsTableAndItPersists() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let path = dir.appending(path: "rl.sqlite").path
+
+        let store = try PanelDataStore(databasePath: path)
+        let empty = try store.rateLimit(key: "acct:x")
+        #expect(empty == nil)
+        try store.setRateLimit(key: "acct:x", failures: 3, blockedUntilISO: "2999-01-01T00:00:00.000Z")
+
+        // Reopen (fresh connection): the row is still there.
+        let reopened = try PanelDataStore(databasePath: path)
+        let row = try #require(try reopened.rateLimit(key: "acct:x"))
+        #expect(row.failures == 3)
+        #expect(row.blockedUntilISO == "2999-01-01T00:00:00.000Z")
+
+        try reopened.clearRateLimit(key: "acct:x")
+        let cleared = try reopened.rateLimit(key: "acct:x")
+        #expect(cleared == nil)
+    }
+}

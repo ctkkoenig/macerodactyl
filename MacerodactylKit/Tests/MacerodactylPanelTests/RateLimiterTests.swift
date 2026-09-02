@@ -1,4 +1,5 @@
 import Foundation
+import MacerodactylKit
 import Testing
 
 @testable import MacerodactylPanel
@@ -96,4 +97,44 @@ import Testing
         #expect(PanelSession.hashToken(token) != token)
         #expect(PanelSession.hashToken(token).count == 64)  // hex SHA-256
     }
+}
+
+@Suite struct RateLimitPersistenceTests {
+    private func tempStore() throws -> (PanelDataStore, String) {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let path = dir.appending(path: "rl.sqlite").path
+        return (try PanelDataStore(databasePath: path), path)
+    }
+
+    @Test func lockoutSurvivesRestart() async throws {
+        let (store, path) = try tempStore()
+        let clock = RateLimiterClock()
+        // Lock out "mallory" with a long backoff.
+        let limiter = LoginRateLimiter(
+            store: SQLiteRateLimitStore(store: store),
+            threshold: 1, baseDelay: 100, maxDelay: 600, now: { clock.now })
+        await limiter.recordFailure(username: "mallory", ip: "9.9.9.9")
+        #expect(!(await limiter.check(username: "mallory", ip: "1.1.1.1").allowed))  // account locked
+
+        // "Restart": a brand-new limiter over a brand-new store on the SAME file.
+        let store2 = try PanelDataStore(databasePath: path)
+        let limiter2 = LoginRateLimiter(
+            store: SQLiteRateLimitStore(store: store2),
+            threshold: 1, baseDelay: 100, maxDelay: 600, now: { clock.now })
+        // The lockout is still in effect — a restart is NOT a brute-force reset.
+        let decision = await limiter2.check(username: "mallory", ip: "1.1.1.1")
+        #expect(!decision.allowed)
+        #expect(decision.retryAfter > 0)
+
+        // A correct password clears it, persistently.
+        await limiter2.recordSuccess(username: "mallory", ip: "9.9.9.9")
+        let store3 = try PanelDataStore(databasePath: path)
+        let limiter3 = LoginRateLimiter(store: SQLiteRateLimitStore(store: store3), now: { clock.now })
+        #expect(await limiter3.check(username: "mallory", ip: "1.1.1.1").allowed)
+    }
+}
+
+private final class RateLimiterClock: @unchecked Sendable {
+    var now = Date(timeIntervalSince1970: 2_000_000)
 }

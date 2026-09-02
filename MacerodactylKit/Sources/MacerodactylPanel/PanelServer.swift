@@ -26,13 +26,15 @@ public struct PanelServerConfig: Sendable, Equatable {
 public actor PanelServer {
     private let store: PanelDataStore
     private let containers: ContainerService
-    private let rateLimiter = LoginRateLimiter()
+    private let rateLimiter: LoginRateLimiter
     private var runTask: Task<Void, Never>?
     private(set) public var isRunning = false
 
     public init(store: PanelDataStore, containers: ContainerService) {
         self.store = store
         self.containers = containers
+        // Persist throttling in the same SQLite so a restart isn't a reset.
+        self.rateLimiter = LoginRateLimiter(store: SQLiteRateLimitStore(store: store))
     }
 
     /// Builds the router with the full middleware stack and routes. Exposed so
