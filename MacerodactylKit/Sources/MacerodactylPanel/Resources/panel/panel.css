@@ -140,6 +140,17 @@ h2 { font-size:15px; color:var(--fg2); font-weight:600; margin:18px 2px 8px; }
 .acc button { flex:0 0 auto; background:var(--tile); border:1px solid var(--line); color:var(--fg); border-radius:9px; padding:10px 13px; font:14px ui-monospace,monospace; min-width:46px; min-height:44px; }
 
 /* ================= responsive: sidebar (wide) vs bottom bar (narrow) ===== */
+/* Narrow (phone): the server-list row stacks — avatar + name on top, then the
+   address, then the stat groups as a full-width strip. */
+@media (max-width:640px) {
+  .server { flex-wrap:wrap; row-gap:12px; padding:14px 16px; }
+  .server .ident { flex:1 1 auto; }
+  .server .addr { flex:0 0 auto; margin-left:auto; }
+  .server .sgroups { flex-basis:100%; justify-content:flex-start; gap:20px; overflow-x:auto; }
+  .server .edge { top:0; bottom:0; }
+  main { padding-left:12px; padding-right:12px; }
+  .wshead { gap:10px; } .wshead h1 { font-size:18px; }
+}
 /* Narrow (phone) — the default: nav is a fixed bottom bar. */
 .tabbar { position:fixed; left:0; right:0; bottom:0; display:flex; flex-direction:row; border-top:1px solid var(--line); padding:4px 4px calc(4px + env(safe-area-inset-bottom)); }
 .tabbar .navitem { flex:1; flex-direction:column; gap:2px; font-size:11px; padding:6px 2px 4px; min-height:48px; justify-content:center; }
