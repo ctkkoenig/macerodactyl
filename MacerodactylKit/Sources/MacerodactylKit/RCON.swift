@@ -196,13 +196,15 @@ public actor RCONClient {
     private func send(_ packet: RCONPacket) async throws {
         guard let connection else { throw RCONError.notConnected }
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            connection.send(content: packet.encoded(), completion: .contentProcessed { error in
-                if let error {
-                    cont.resume(throwing: RCONError.connectionFailed(String(describing: error)))
-                } else {
-                    cont.resume()
-                }
-            })
+            connection.send(
+                content: packet.encoded(),
+                completion: .contentProcessed { error in
+                    if let error {
+                        cont.resume(throwing: RCONError.connectionFailed(String(describing: error)))
+                    } else {
+                        cont.resume()
+                    }
+                })
         }
     }
 

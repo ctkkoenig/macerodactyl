@@ -148,7 +148,8 @@ public enum PathConfinement {
         // A symlink leaf must land inside the root too — including a dangling
         // one, which a write would otherwise create a file through.
         if let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: resolved.path) {
-            let destinationURL = destination.hasPrefix("/")
+            let destinationURL =
+                destination.hasPrefix("/")
                 ? URL(fileURLWithPath: destination)
                 : resolved.deletingLastPathComponent().appending(path: destination)
             let final = destinationURL.resolvingSymlinksInPath().standardizedFileURL

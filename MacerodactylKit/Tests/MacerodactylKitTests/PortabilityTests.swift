@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import MacerodactylKit
 
 @Suite struct ComposeDetectionTests {
@@ -23,15 +24,15 @@ import Testing
         #expect(command == .standalone(binary: URL(fileURLWithPath: standalone)))
         let (exe, args) = command!.invocation(["--project-directory", "/x", "stop"])
         #expect(exe.path == standalone)
-        #expect(args == ["--project-directory", "/x", "stop"]) // no "compose" prefix
+        #expect(args == ["--project-directory", "/x", "stop"])  // no "compose" prefix
     }
 
     @Test func standaloneCandidatesCoverBothArchitectures() {
         let candidates = ComposeCommand.standaloneCandidates(besideDocker: URL(fileURLWithPath: "/custom/bin/docker"))
             .map(\.path)
-        #expect(candidates.contains("/custom/bin/docker-compose")) // beside the resolved docker
-        #expect(candidates.contains("/opt/homebrew/bin/docker-compose")) // Apple Silicon
-        #expect(candidates.contains("/usr/local/bin/docker-compose")) // Intel
+        #expect(candidates.contains("/custom/bin/docker-compose"))  // beside the resolved docker
+        #expect(candidates.contains("/opt/homebrew/bin/docker-compose"))  // Apple Silicon
+        #expect(candidates.contains("/usr/local/bin/docker-compose"))  // Intel
     }
 
     @Test func nilWhenNeitherShapeExists() {
@@ -58,8 +59,8 @@ import Testing
 @Suite struct DockerBinaryArchCoverageTests {
     @Test func candidatesCoverBothArchitectures() {
         let paths = DockerBinaryLocator.defaultCandidates.map(\.path)
-        #expect(paths.contains("/opt/homebrew/bin/docker")) // Apple Silicon Homebrew
-        #expect(paths.contains("/usr/local/bin/docker"))    // Intel Homebrew / Docker Desktop
+        #expect(paths.contains("/opt/homebrew/bin/docker"))  // Apple Silicon Homebrew
+        #expect(paths.contains("/usr/local/bin/docker"))  // Intel Homebrew / Docker Desktop
         #expect(paths.contains { $0.hasSuffix(".orbstack/bin/docker") })
     }
 }

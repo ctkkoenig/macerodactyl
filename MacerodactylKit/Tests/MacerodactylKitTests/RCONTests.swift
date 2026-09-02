@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import MacerodactylKit
 
 @Suite struct RCONPacketTests {
@@ -27,7 +28,7 @@ import Testing
         let full = RCONPacket(id: 1, type: 0, body: "hello").encoded()
         var partial = full.prefix(6) as Data
         #expect(RCONPacket.decode(from: &partial) == nil)
-        #expect(partial.count == 6) // untouched
+        #expect(partial.count == 6)  // untouched
 
         // Two packets glued together decode one at a time.
         var doubled = full + RCONPacket(id: 2, type: 0, body: "again").encoded()
@@ -57,10 +58,11 @@ import Testing
 
 @Suite struct MinecraftDetectionTests {
     private func inspectJSON(env: [String], image: String, ports: String) -> Data {
-        Data("""
-        [{"Config": {"Env": \(toJSON(env)), "Image": "\(image)"},
-          "NetworkSettings": {"Ports": \(ports)}}]
-        """.utf8)
+        Data(
+            """
+            [{"Config": {"Env": \(toJSON(env)), "Image": "\(image)"},
+              "NetworkSettings": {"Ports": \(ports)}}]
+            """.utf8)
     }
 
     private func toJSON(_ strings: [String]) -> String {
@@ -73,8 +75,9 @@ import Testing
             image: "itzg/minecraft-server",
             ports: #"{"25565/tcp": null, "25575/tcp": [{"HostIp": "0.0.0.0", "HostPort": "25575"}]}"#
         )
-        #expect(MinecraftRCON.parse(inspectJSON: json)
-            == .available(RCONEndpoint(host: "127.0.0.1", port: 25575, password: "fixturepass")))
+        #expect(
+            MinecraftRCON.parse(inspectJSON: json)
+                == .available(RCONEndpoint(host: "127.0.0.1", port: 25575, password: "fixturepass")))
     }
 
     @Test func honorsCustomRCONPort() {
@@ -83,8 +86,9 @@ import Testing
             image: "itzg/minecraft-server",
             ports: #"{"9999/tcp": [{"HostIp": "0.0.0.0", "HostPort": "31000"}]}"#
         )
-        #expect(MinecraftRCON.parse(inspectJSON: json)
-            == .available(RCONEndpoint(host: "127.0.0.1", port: 31000, password: "pw")))
+        #expect(
+            MinecraftRCON.parse(inspectJSON: json)
+                == .available(RCONEndpoint(host: "127.0.0.1", port: 31000, password: "pw")))
     }
 
     @Test func unpublishedPortIsUnreachableNotExec() {
@@ -119,8 +123,9 @@ import Testing
 
     @Test func logArgs() {
         #expect(DockerArgs.logs(containerID: "abc") == ["logs", "--follow", "--tail", "500", "abc"])
-        #expect(DockerArgs.logs(containerID: "abc", tail: 100, timestamps: true)
-            == ["logs", "--follow", "--tail", "100", "--timestamps", "abc"])
+        #expect(
+            DockerArgs.logs(containerID: "abc", tail: 100, timestamps: true)
+                == ["logs", "--follow", "--tail", "100", "--timestamps", "abc"])
     }
 }
 

@@ -51,10 +51,11 @@ public final class LogBuffer {
 
     public func append(_ newLines: [String]) {
         guard !newLines.isEmpty else { return }
-        lines.append(contentsOf: newLines.map { text in
-            defer { nextID += 1 }
-            return LogLine(id: nextID, text: text)
-        })
+        lines.append(
+            contentsOf: newLines.map { text in
+                defer { nextID += 1 }
+                return LogLine(id: nextID, text: text)
+            })
         if lines.count > cap {
             lines.removeFirst(lines.count - cap + cap / 10)
         }

@@ -1,5 +1,5 @@
-import SwiftUI
 import MacerodactylKit
+import SwiftUI
 
 /// Native management surface for the web panel: enable/bind/port, first-run
 /// admin, accounts + grants, and the audit log. Accounts are managed ONLY
@@ -62,9 +62,12 @@ public struct PanelSettingsView: View {
             Toggle("Allow access from other devices on the network (LAN)", isOn: $model.bindLAN)
                 .onChange(of: model.bindLAN) { _, on in model.setBindLAN(on) }
             if model.bindLAN {
-                Label("The panel is reachable by any device on your local network over plain HTTP. Only enable this behind a trusted network or a tunnel (e.g. Cloudflare Tunnel).", systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                Label(
+                    "The panel is reachable by any device on your local network over plain HTTP. Only enable this behind a trusted network or a tunnel (e.g. Cloudflare Tunnel).",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
             }
             Text("Plain HTTP only — put TLS at a tunnel in front of it. The panel never runs after you quit the app.")
                 .font(.caption)
@@ -89,7 +92,9 @@ public struct PanelSettingsView: View {
                         Button("Grants…") { model.editingUser = user }
                             .controlSize(.small)
                     }
-                    Button(role: .destructive) { model.deleteUser(user) } label: {
+                    Button(role: .destructive) {
+                        model.deleteUser(user)
+                    } label: {
                         Image(systemName: "trash")
                     }
                     .controlSize(.small)
@@ -165,7 +170,10 @@ struct GrantsEditor: View {
                     }
                 }
             }
-            HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
         }
         .padding(18)
         .frame(width: 480, height: 460)

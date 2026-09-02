@@ -97,11 +97,11 @@ public enum AppSettings {
     }
 }
 
-public extension Notification.Name {
+extension Notification.Name {
     /// Posted when a setting changes so live views re-read without a restart.
-    static let macerodactylSettingsChanged = Notification.Name("macerodactylSettingsChanged")
+    public static let macerodactylSettingsChanged = Notification.Name("macerodactylSettingsChanged")
     /// Posted when a web-panel setting changes so the server restarts/rebinds.
-    static let macerodactylPanelSettingsChanged = Notification.Name("macerodactylPanelSettingsChanged")
+    public static let macerodactylPanelSettingsChanged = Notification.Name("macerodactylPanelSettingsChanged")
 }
 
 public enum AppPaths {

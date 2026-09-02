@@ -1,8 +1,9 @@
 import Foundation
 import Hummingbird
 import HummingbirdTesting
-import Testing
 import MacerodactylKit
+import Testing
+
 @testable import MacerodactylPanel
 
 /// Container-feature routes over HTTP: per-permission gating, the 404/403
@@ -12,7 +13,8 @@ import MacerodactylKit
     let base = PanelServerTests()
 
     func loginToken(_ client: some TestClientProtocol, _ harness: PanelServerTests.Harness, admin: Bool = false) async throws -> String {
-        let (_, cookie) = try await base.login(client,
+        let (_, cookie) = try await base.login(
+            client,
             username: admin ? "admin" : "scoped",
             password: admin ? harness.adminPassword : harness.scopedPassword)
         return try #require(cookie)
@@ -32,9 +34,11 @@ import MacerodactylKit
         let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, power: true))
         try await harness.app.test(.router) { client in
             let token = try await loginToken(client, harness)
-            try await client.execute(uri: "/api/containers/bot/power", method: .post,
-                                     headers: headers(token, csrf: true, json: true),
-                                     body: ByteBuffer(string: #"{"action":"restart"}"#)) { response in
+            try await client.execute(
+                uri: "/api/containers/bot/power", method: .post,
+                headers: headers(token, csrf: true, json: true),
+                body: ByteBuffer(string: #"{"action":"restart"}"#)
+            ) { response in
                 #expect(response.status == .ok)
             }
         }
@@ -46,13 +50,15 @@ import MacerodactylKit
         let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, power: false))
         try await harness.app.test(.router) { client in
             let token = try await loginToken(client, harness)
-            try await client.execute(uri: "/api/containers/bot/power", method: .post,
-                                     headers: headers(token, csrf: true, json: true),
-                                     body: ByteBuffer(string: #"{"action":"stop"}"#)) { response in
+            try await client.execute(
+                uri: "/api/containers/bot/power", method: .post,
+                headers: headers(token, csrf: true, json: true),
+                body: ByteBuffer(string: #"{"action":"stop"}"#)
+            ) { response in
                 #expect(response.status == .forbidden)
             }
         }
-        #expect(harness.service.powerCalls.isEmpty) // never reached the service
+        #expect(harness.service.powerCalls.isEmpty)  // never reached the service
     }
 
     @Test func consoleRequiresConsolePermission() async throws {
@@ -60,9 +66,11 @@ import MacerodactylKit
         try await harness.app.test(.router) { client in
             let token = try await loginToken(client, harness)
             // No console grant → 403.
-            try await client.execute(uri: "/api/containers/bot/console", method: .post,
-                                     headers: headers(token, csrf: true, json: true),
-                                     body: ByteBuffer(string: #"{"command":"ls"}"#)) { response in
+            try await client.execute(
+                uri: "/api/containers/bot/console", method: .post,
+                headers: headers(token, csrf: true, json: true),
+                body: ByteBuffer(string: #"{"command":"ls"}"#)
+            ) { response in
                 #expect(response.status == .forbidden)
             }
         }
@@ -76,26 +84,32 @@ import MacerodactylKit
             try await client.execute(uri: "/api/containers/bot/schedule", method: .get, headers: headers(token)) { response in
                 #expect(response.status == .forbidden)
             }
-            try await client.execute(uri: "/api/containers/bot/schedule", method: .post,
-                                     headers: headers(token, csrf: true, json: true),
-                                     body: ByteBuffer(string: #"{"hour":4,"minute":30}"#)) { response in
+            try await client.execute(
+                uri: "/api/containers/bot/schedule", method: .post,
+                headers: headers(token, csrf: true, json: true),
+                body: ByteBuffer(string: #"{"hour":4,"minute":30}"#)
+            ) { response in
                 #expect(response.status == .forbidden)
             }
         }
-        #expect(harness.service.scheduleCalls.isEmpty) // never reached the service
+        #expect(harness.service.scheduleCalls.isEmpty)  // never reached the service
     }
 
     @Test func schedulesWorkWhenGranted() async throws {
         let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, schedules: true))
         try await harness.app.test(.router) { client in
             let token = try await loginToken(client, harness)
-            try await client.execute(uri: "/api/containers/bot/schedule", method: .post,
-                                     headers: headers(token, csrf: true, json: true),
-                                     body: ByteBuffer(string: #"{"hour":4,"minute":30,"weekdays":[1,5]}"#)) { response in
+            try await client.execute(
+                uri: "/api/containers/bot/schedule", method: .post,
+                headers: headers(token, csrf: true, json: true),
+                body: ByteBuffer(string: #"{"hour":4,"minute":30,"weekdays":[1,5]}"#)
+            ) { response in
                 #expect(response.status == .ok)
             }
-            try await client.execute(uri: "/api/containers/bot/schedule", method: .delete,
-                                     headers: headers(token, csrf: true)) { response in
+            try await client.execute(
+                uri: "/api/containers/bot/schedule", method: .delete,
+                headers: headers(token, csrf: true)
+            ) { response in
                 #expect(response.status == .ok)
             }
         }
@@ -108,7 +122,7 @@ import MacerodactylKit
         try await harness.app.test(.router) { client in
             let token = try await loginToken(client, harness)
             try await client.execute(uri: "/api/containers/bot/files?path=", method: .get, headers: headers(token)) { response in
-                #expect(response.status == .forbidden) // view but not files
+                #expect(response.status == .forbidden)  // view but not files
             }
         }
     }
@@ -140,9 +154,11 @@ import MacerodactylKit
                 #expect(list.contains { $0["name"] as? String == "docker-compose.yml" })
             }
             // Write a new file, then read it back.
-            try await client.execute(uri: "/api/containers/bot/files/content?path=notes.txt", method: .put,
-                                     headers: headers(token, csrf: true, json: true),
-                                     body: ByteBuffer(string: #"{"text":"hello\n","lineEnding":"lf"}"#)) { response in
+            try await client.execute(
+                uri: "/api/containers/bot/files/content?path=notes.txt", method: .put,
+                headers: headers(token, csrf: true, json: true),
+                body: ByteBuffer(string: #"{"text":"hello\n","lineEnding":"lf"}"#)
+            ) { response in
                 #expect(response.status == .ok)
             }
             #expect(FileManager.default.fileExists(atPath: harness.botStackRoot.appending(path: "notes.txt").path))
@@ -166,14 +182,17 @@ import MacerodactylKit
             for path in escapes {
                 let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
                 // Read attempt is refused (403/404), never 200 with content.
-                try await client.execute(uri: "/api/containers/bot/files/content?path=\(encoded)", method: .get, headers: headers(token)) { response in
+                try await client.execute(uri: "/api/containers/bot/files/content?path=\(encoded)", method: .get, headers: headers(token)) {
+                    response in
                     #expect(response.status == .forbidden || response.status == .notFound || response.status == .badRequest)
                     #expect(!String(buffer: response.body).contains("TOP SECRET"))
                 }
                 // Write attempt is refused and creates nothing outside the root.
-                try await client.execute(uri: "/api/containers/bot/files/content?path=\(encoded)", method: .put,
-                                         headers: headers(token, csrf: true, json: true),
-                                         body: ByteBuffer(string: #"{"text":"HIJACK","lineEnding":"lf"}"#)) { response in
+                try await client.execute(
+                    uri: "/api/containers/bot/files/content?path=\(encoded)", method: .put,
+                    headers: headers(token, csrf: true, json: true),
+                    body: ByteBuffer(string: #"{"text":"HIJACK","lineEnding":"lf"}"#)
+                ) { response in
                     #expect(response.status != .ok)
                 }
             }
@@ -194,13 +213,15 @@ import MacerodactylKit
             var ungrantedStatus: HTTPResponse.Status?
             var ungrantedBody = ""
             try await client.execute(uri: "/api/containers/secret", method: .get, headers: headers(token)) { response in
-                ungrantedStatus = response.status; ungrantedBody = String(buffer: response.body)
+                ungrantedStatus = response.status
+                ungrantedBody = String(buffer: response.body)
             }
             // "ghost" does not exist at all — and scoped isn't granted it either.
             var ghostStatus: HTTPResponse.Status?
             var ghostBody = ""
             try await client.execute(uri: "/api/containers/ghost", method: .get, headers: headers(token)) { response in
-                ghostStatus = response.status; ghostBody = String(buffer: response.body)
+                ghostStatus = response.status
+                ghostBody = String(buffer: response.body)
             }
             // Identical: both 404, same body — the scoping 404 can't be told
             // apart from the genuinely-absent 404.

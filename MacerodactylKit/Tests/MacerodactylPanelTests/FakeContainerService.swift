@@ -1,5 +1,6 @@
 import Foundation
 import MacerodactylKit
+
 @testable import MacerodactylPanel
 
 /// In-memory container service for HTTP tests. Records power actions, serves
@@ -8,7 +9,7 @@ import MacerodactylKit
 final class FakeContainerService: ContainerService, @unchecked Sendable {
     struct Fixture {
         let container: DockerContainer
-        let stackRoot: URL?   // nil = no file access (bare container)
+        let stackRoot: URL?  // nil = no file access (bare container)
     }
 
     private let lock = NSLock()
@@ -52,9 +53,10 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
     func statsSnapshot() async -> [String: ContainerStats] {
         var out: [String: ContainerStats] = [:]
         for (name, fixture) in fixtures where fixture.container.isRunning {
-            out[name] = ContainerStats(name: name, cpuPercent: 1, memUsedBytes: 1_000_000,
-                                       memLimitBytes: 10_000_000, memPercent: 10, netRxBytes: 100,
-                                       netTxBytes: 50, pids: 3)
+            out[name] = ContainerStats(
+                name: name, cpuPercent: 1, memUsedBytes: 1_000_000,
+                memLimitBytes: 10_000_000, memPercent: 10, netRxBytes: 100,
+                netTxBytes: 50, pids: 3)
         }
         return out
     }
@@ -62,8 +64,10 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
     func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>? {
         guard let fixture = fixtures[containerName], fixture.container.isRunning else { return nil }
         return AsyncThrowingStream { continuation in
-            continuation.yield(ContainerStats(name: containerName, cpuPercent: 2, memUsedBytes: 2_000_000,
-                memLimitBytes: 10_000_000, memPercent: 20, netRxBytes: 200, netTxBytes: 100, pids: 4))
+            continuation.yield(
+                ContainerStats(
+                    name: containerName, cpuPercent: 2, memUsedBytes: 2_000_000,
+                    memLimitBytes: 10_000_000, memPercent: 20, netRxBytes: 200, netTxBytes: 100, pids: 4))
             continuation.finish()
         }
     }

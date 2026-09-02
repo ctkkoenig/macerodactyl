@@ -61,13 +61,15 @@ public struct LiveContainerService: ContainerService {
 
     public func logLines(containerName: String) async -> AsyncThrowingStream<String, Error>? {
         guard let container = await container(named: containerName),
-              let cli = await MainActor.run(body: { store.cli }) else { return nil }
+            let cli = await MainActor.run(body: { store.cli })
+        else { return nil }
         return LogStreamService.lines(for: container.id, cli: cli)
     }
 
     public func runConsole(containerName: String, command: String) async -> ConsoleEntry? {
         guard let container = await container(named: containerName),
-              let cli = await MainActor.run(body: { store.cli }) else { return nil }
+            let cli = await MainActor.run(body: { store.cli })
+        else { return nil }
         switch await MinecraftRCON.detect(containerID: container.id, cli: cli) {
         case .available(let endpoint):
             let client = RCONClient(endpoint: endpoint)
@@ -98,14 +100,16 @@ public struct LiveContainerService: ContainerService {
 
     public func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>? {
         guard let container = await container(named: containerName), container.isRunning,
-              let cli = await MainActor.run(body: { store.cli }) else { return nil }
+            let cli = await MainActor.run(body: { store.cli })
+        else { return nil }
         return cli.statsStream(containerID: container.id)
     }
 
     public func schedule(containerName: String) async -> (RestartSchedule, ScheduleRunResult?)? {
         guard let cli = await MainActor.run(body: { store.cli }),
-              let service = try? ScheduleService(dockerPath: cli.binary.path),
-              let schedule = service.schedule(forContainerName: containerName) else { return nil }
+            let service = try? ScheduleService(dockerPath: cli.binary.path),
+            let schedule = service.schedule(forContainerName: containerName)
+        else { return nil }
         return (schedule, service.lastResult(for: schedule))
     }
 
@@ -132,7 +136,8 @@ enum FileServiceMessage {
         switch error {
         case FileServiceError.tooLarge(let actual, let limit):
             let fmt = ByteCountFormatter()
-            return "This file is \(fmt.string(fromByteCount: Int64(actual))) — larger than the \(fmt.string(fromByteCount: Int64(limit))) editing limit."
+            return
+                "This file is \(fmt.string(fromByteCount: Int64(actual))) — larger than the \(fmt.string(fromByteCount: Int64(limit))) editing limit."
         case FileServiceError.binaryFile: return "This looks like a binary file; the editor only opens text."
         case FileServiceError.notFound: return "The file no longer exists."
         case FileServiceError.isDirectory: return "That's a directory."

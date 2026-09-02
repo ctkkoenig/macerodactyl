@@ -103,8 +103,7 @@ struct Sparkline: View {
                 for (index, sample) in samples.enumerated() {
                     let x = CGFloat(index) * stepX
                     let y = geo.size.height * (1 - CGFloat(max(0, min(1, sample))))
-                    if index == 0 { path.move(to: CGPoint(x: x, y: y)) }
-                    else { path.addLine(to: CGPoint(x: x, y: y)) }
+                    if index == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
                 }
             }
             .stroke(color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
@@ -142,14 +141,18 @@ public struct StatCardRow: View {
             }
             let columns = [GridItem(.adaptive(minimum: 150), spacing: 10)]
             LazyVGrid(columns: columns, spacing: 10) {
-                StatCard(title: "CPU", value: cpuValue, accent: .blue,
-                         samples: cpuHistory, unavailable: unavailable)
-                StatCard(title: "Memory", value: memValue, secondary: memSecondary, accent: .purple,
-                         fraction: stats.map { $0.memPercent / 100 }, samples: memHistory, unavailable: unavailable)
-                StatCard(title: "Network", value: netValue, secondary: netSecondary, accent: .teal,
-                         unavailable: unavailable)
-                StatCard(title: "Uptime", value: uptime ?? "—", accent: .green,
-                         unavailable: unavailable && uptime == nil)
+                StatCard(
+                    title: "CPU", value: cpuValue, accent: .blue,
+                    samples: cpuHistory, unavailable: unavailable)
+                StatCard(
+                    title: "Memory", value: memValue, secondary: memSecondary, accent: .purple,
+                    fraction: stats.map { $0.memPercent / 100 }, samples: memHistory, unavailable: unavailable)
+                StatCard(
+                    title: "Network", value: netValue, secondary: netSecondary, accent: .teal,
+                    unavailable: unavailable)
+                StatCard(
+                    title: "Uptime", value: uptime ?? "—", accent: .green,
+                    unavailable: unavailable && uptime == nil)
             }
         }
     }

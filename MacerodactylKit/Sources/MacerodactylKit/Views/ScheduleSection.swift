@@ -54,9 +54,11 @@ struct ScheduleSection: View {
             .controlSize(.small)
         } else {
             HStack {
-                Text("None. Restart policies keep containers up at boot; a schedule adds a recurring restart on top — it runs even while this app is closed.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "None. Restart policies keep containers up at boot; a schedule adds a recurring restart on top — it runs even while this app is closed."
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
                 Spacer()
                 Button("Add schedule…") { showingEditor = true }
                     .controlSize(.small)
@@ -78,9 +80,12 @@ struct ScheduleSection: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             case .timedOut:
-                Label("Last run \(stamp) TIMED OUT — docker didn't respond within \(ScheduleService.restartDeadlineSeconds)s and was stopped. Docker Desktop may be quit (a stale socket makes restart hang).", systemImage: "clock.badge.exclamationmark.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                Label(
+                    "Last run \(stamp) TIMED OUT — docker didn't respond within \(ScheduleService.restartDeadlineSeconds)s and was stopped. Docker Desktop may be quit (a stale socket makes restart hang).",
+                    systemImage: "clock.badge.exclamationmark.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
             }
         } else {
             Text("Hasn't run yet")
@@ -93,9 +98,11 @@ struct ScheduleSection: View {
     private var healthLine: some View {
         switch health {
         case .binaryMissing(let installed):
-            Text("BROKEN: points at \(installed), which no longer exists — scheduled restarts fail to launch and produce no log. Edit and save to rewrite it with the current docker path.")
-                .font(.caption)
-                .foregroundStyle(.red)
+            Text(
+                "BROKEN: points at \(installed), which no longer exists — scheduled restarts fail to launch and produce no log. Edit and save to rewrite it with the current docker path."
+            )
+            .font(.caption)
+            .foregroundStyle(.red)
         case .binaryOutdated(let installed, let current):
             Text("Written for \(installed); docker is now \(current). Edit and save to update the agent.")
                 .font(.caption)
@@ -196,10 +203,13 @@ private struct ScheduleEditorSheet: View {
                     .foregroundStyle(.secondary)
                 HStack(spacing: 4) {
                     ForEach(0..<7, id: \.self) { day in
-                        Toggle(Self.dayNames[day], isOn: Binding(
-                            get: { weekdays.contains(day) },
-                            set: { on in if on { weekdays.insert(day) } else { weekdays.remove(day) } }
-                        ))
+                        Toggle(
+                            Self.dayNames[day],
+                            isOn: Binding(
+                                get: { weekdays.contains(day) },
+                                set: { on in if on { weekdays.insert(day) } else { weekdays.remove(day) } }
+                            )
+                        )
                         .toggleStyle(.button)
                         .controlSize(.small)
                     }

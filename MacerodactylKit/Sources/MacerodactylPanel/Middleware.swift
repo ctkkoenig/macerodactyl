@@ -1,7 +1,7 @@
 import Foundation
+import HTTPTypes
 import Hummingbird
 import HummingbirdAuth
-import HTTPTypes
 import MacerodactylKit
 
 /// The custom header a mutating request must carry (CSRF defense).
@@ -75,21 +75,23 @@ struct ContainerScopeMiddleware: RouterMiddleware {
     func handle(_ request: Request, context: Context, next: (Request, Context) async throws -> Response) async throws -> Response {
         let user = try context.requireIdentity()
         guard let name = context.parameters.get("name") else {
-            return try await next(request, context) // list route: no container to scope
+            return try await next(request, context)  // list route: no container to scope
         }
         let engine = try store.authorizationEngine(for: user)
         let required = Self.requiredPermission(path: request.uri.path)
 
         // Existence gate first: without view, the container is invisible → 404.
         guard engine.canView(containerNamed: name) else {
-            try? store.recordAudit(username: user.username, action: auditAction(for: required),
-                                  containerName: name, outcome: "denied", sourceIP: context.clientIP)
+            try? store.recordAudit(
+                username: user.username, action: auditAction(for: required),
+                containerName: name, outcome: "denied", sourceIP: context.clientIP)
             throw HTTPError(.notFound)
         }
         // Action gate: viewable, but this specific action may still be forbidden.
         if required != .view, !engine.can(required, containerNamed: name) {
-            try? store.recordAudit(username: user.username, action: auditAction(for: required),
-                                  containerName: name, outcome: "denied", sourceIP: context.clientIP)
+            try? store.recordAudit(
+                username: user.username, action: auditAction(for: required),
+                containerName: name, outcome: "denied", sourceIP: context.clientIP)
             throw HTTPError(.forbidden)
         }
         return try await next(request, context)
@@ -102,7 +104,7 @@ struct ContainerScopeMiddleware: RouterMiddleware {
         if path.contains("/schedule") { return .schedules }
         if path.hasSuffix("/console") { return .console }
         if path.hasSuffix("/power") { return .power }
-        return .view // detail, logs, stats
+        return .view  // detail, logs, stats
     }
 
     private func auditAction(for permission: ContainerPermission) -> String {

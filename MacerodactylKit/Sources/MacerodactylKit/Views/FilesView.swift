@@ -16,17 +16,18 @@ struct FilesView: View {
 
     private var unavailable: some View {
         let stacksPath = abbreviatePath(AppSettings.stacksRoot.path)
-        let (title, reason): (String, String) = if container.composeWorkingDir == nil {
-            (
-                "No files to manage",
-                "This is a bare docker run container — it has no stack folder. File editing is available for compose stacks whose folder lives under \(stacksPath)."
-            )
-        } else {
-            (
-                "Stack folder is outside \(stacksPath)",
-                "This stack's compose project lives at \(abbreviatePath(container.composeWorkingDir ?? "")), outside the stacks folder, so file access is disabled. Move the stack under \(stacksPath) or change the stacks folder in Settings."
-            )
-        }
+        let (title, reason): (String, String) =
+            if container.composeWorkingDir == nil {
+                (
+                    "No files to manage",
+                    "This is a bare docker run container — it has no stack folder. File editing is available for compose stacks whose folder lives under \(stacksPath)."
+                )
+            } else {
+                (
+                    "Stack folder is outside \(stacksPath)",
+                    "This stack's compose project lives at \(abbreviatePath(container.composeWorkingDir ?? "")), outside the stacks folder, so file access is disabled. Move the stack under \(stacksPath) or change the stacks folder in Settings."
+                )
+            }
         return ContentUnavailableView {
             Label(title, systemImage: "folder.badge.questionmark")
         } description: {
@@ -100,7 +101,7 @@ final class FilesModel {
             savedText = editorText
             knownModified = service.modificationDate(openPath)
             externallyChanged = false
-            loadDirectory(currentDirectory) // refresh sizes/dates
+            loadDirectory(currentDirectory)  // refresh sizes/dates
         } catch {
             fileMessage = Self.describe(error)
         }
@@ -141,7 +142,8 @@ final class FilesModel {
         switch error {
         case FileServiceError.tooLarge(let actual, let limit):
             let fmt = ByteCountFormatter()
-            return "This file is \(fmt.string(fromByteCount: Int64(actual))) — larger than the \(fmt.string(fromByteCount: Int64(limit))) editing limit. Open it in another tool."
+            return
+                "This file is \(fmt.string(fromByteCount: Int64(actual))) — larger than the \(fmt.string(fromByteCount: Int64(limit))) editing limit. Open it in another tool."
         case FileServiceError.binaryFile:
             return "This looks like a binary file (an archive, image, or similar). The editor only opens text so it can't mangle it."
         case FileServiceError.notFound:
@@ -173,8 +175,9 @@ struct FilesBrowserView: View {
             breadcrumb
             Divider()
             if let listError = model.listError {
-                ContentUnavailableView("Can’t list folder", systemImage: "exclamationmark.triangle",
-                                       description: Text(listError))
+                ContentUnavailableView(
+                    "Can’t list folder", systemImage: "exclamationmark.triangle",
+                    description: Text(listError))
             } else {
                 table
             }
@@ -187,8 +190,12 @@ struct FilesBrowserView: View {
     private var breadcrumb: some View {
         let parts = model.currentDirectory.split(separator: "/").map(String.init)
         return HStack(spacing: 4) {
-            Button { model.loadDirectory("") } label: { Image(systemName: "house") }
-                .buttonStyle(.borderless)
+            Button {
+                model.loadDirectory("")
+            } label: {
+                Image(systemName: "house")
+            }
+            .buttonStyle(.borderless)
             ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
                 Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                 Button(part) { model.loadDirectory(parts[0...index].joined(separator: "/")) }
@@ -235,14 +242,14 @@ struct FilesBrowserView: View {
             }
             .width(60)
         }
-        .contextMenu(forSelectionType: FileService.Entry.ID.self) { _ in } primaryAction: { ids in
+        .contextMenu(forSelectionType: FileService.Entry.ID.self) { _ in
+        } primaryAction: { ids in
             if let id = ids.first, let entry = model.entries.first(where: { $0.id == id }) { open(entry) }
         }
     }
 
     private func open(_ entry: FileService.Entry) {
-        if entry.isDirectory { model.loadDirectory(entry.relativePath) }
-        else { model.openFile(entry.relativePath) }
+        if entry.isDirectory { model.loadDirectory(entry.relativePath) } else { model.openFile(entry.relativePath) }
     }
 }
 
@@ -256,10 +263,14 @@ struct FileEditorView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            if model.externallyChanged { externalBanner; Divider() }
+            if model.externallyChanged {
+                externalBanner
+                Divider()
+            }
             if let message = model.fileMessage {
-                ContentUnavailableView("Can’t edit this file", systemImage: "doc.questionmark",
-                                       description: Text(message))
+                ContentUnavailableView(
+                    "Can’t edit this file", systemImage: "doc.questionmark",
+                    description: Text(message))
             } else {
                 TextEditor(text: $model.editorText)
                     .font(.system(size: 12.5, design: .monospaced))

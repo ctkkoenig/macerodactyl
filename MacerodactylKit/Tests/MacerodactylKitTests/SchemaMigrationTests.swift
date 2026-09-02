@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import MacerodactylKit
 
 @Suite struct SchemaMigrationTests {
@@ -13,8 +14,9 @@ import Testing
         let store = try PanelDataStore(databasePath: tempDBPath())
         let user = try store.createUser(username: "a", passwordHash: "h", isAdmin: false)
         // The new permission round-trips through the DB.
-        try store.setGrant(userID: user.id, containerName: "bot",
-                          grant: ContainerGrant(view: true, schedules: true))
+        try store.setGrant(
+            userID: user.id, containerName: "bot",
+            grant: ContainerGrant(view: true, schedules: true))
         let grants = try store.grants(forUserID: user.id)
         #expect(grants["bot"]?.schedules == true)
     }
@@ -23,16 +25,19 @@ import Testing
         // The ON CONFLICT DO UPDATE path (existing row), not just INSERT.
         let store = try PanelDataStore(databasePath: tempDBPath())
         let user = try store.createUser(username: "a", passwordHash: "h", isAdmin: false)
-        try store.setGrant(userID: user.id, containerName: "bot",
-                          grant: ContainerGrant(view: true, power: true)) // schedules off
+        try store.setGrant(
+            userID: user.id, containerName: "bot",
+            grant: ContainerGrant(view: true, power: true))  // schedules off
         #expect(try store.grants(forUserID: user.id)["bot"]?.schedules == false)
         // Update the same row to add schedules.
-        try store.setGrant(userID: user.id, containerName: "bot",
-                          grant: ContainerGrant(view: true, power: true, schedules: true))
+        try store.setGrant(
+            userID: user.id, containerName: "bot",
+            grant: ContainerGrant(view: true, power: true, schedules: true))
         #expect(try store.grants(forUserID: user.id)["bot"]?.schedules == true)
         // And turning it back off updates too.
-        try store.setGrant(userID: user.id, containerName: "bot",
-                          grant: ContainerGrant(view: true, power: true, schedules: false))
+        try store.setGrant(
+            userID: user.id, containerName: "bot",
+            grant: ContainerGrant(view: true, power: true, schedules: false))
         #expect(try store.grants(forUserID: user.id)["bot"]?.schedules == false)
     }
 
@@ -41,7 +46,8 @@ import Testing
         // Build a v1 database by hand (no perm_schedules column).
         do {
             let db = try Database(path: path)
-            try db.execute("""
+            try db.execute(
+                """
                 CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL, is_admin INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT '');
@@ -67,21 +73,24 @@ import Testing
         #expect(grants["bot"]?.schedules == false)
 
         // And the new column is writable now.
-        try store.setGrant(userID: 1, containerName: "bot",
-                          grant: ContainerGrant(view: true, schedules: true))
+        try store.setGrant(
+            userID: 1, containerName: "bot",
+            grant: ContainerGrant(view: true, schedules: true))
         #expect(try store.grants(forUserID: 1)["bot"]?.schedules == true)
     }
 }
 
 @Suite struct SchedulesAuthorizationTests {
     @Test func schedulesPermissionIsIndependentAndRequiresView() {
-        let engine = AuthorizationEngine(isAdmin: false, grants: [
-            "bot": ContainerGrant(view: true, schedules: true),
-            "other": ContainerGrant(view: false, schedules: true), // malformed: no view
-        ])
+        let engine = AuthorizationEngine(
+            isAdmin: false,
+            grants: [
+                "bot": ContainerGrant(view: true, schedules: true),
+                "other": ContainerGrant(view: false, schedules: true),  // malformed: no view
+            ])
         #expect(engine.can(.schedules, containerNamed: "bot"))
-        #expect(!engine.can(.power, containerNamed: "bot"))       // independent
-        #expect(!engine.can(.schedules, containerNamed: "other")) // needs view
+        #expect(!engine.can(.power, containerNamed: "bot"))  // independent
+        #expect(!engine.can(.schedules, containerNamed: "other"))  // needs view
         #expect(ContainerPermission.allCases.contains(.schedules))
     }
 }

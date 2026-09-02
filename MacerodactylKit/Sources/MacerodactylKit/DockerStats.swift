@@ -47,8 +47,9 @@ public enum DockerStatsParser {
     /// Parses one JSON line, or nil if it can't be read (skipped, not zeroed).
     public static func parse(line: String, now: Date = Date()) -> ContainerStats? {
         guard let data = line.data(using: .utf8),
-              let stats = try? JSONDecoder().decode(StatsLine.self, from: data),
-              let name = stats.Name ?? stats.Container else { return nil }
+            let stats = try? JSONDecoder().decode(StatsLine.self, from: data),
+            let name = stats.Name ?? stats.Container
+        else { return nil }
         let (used, limit) = splitPair(stats.MemUsage).map { (parseBytes($0.0), parseBytes($0.1)) } ?? (nil, nil)
         let (rx, tx) = splitPair(stats.NetIO).map { (parseBytes($0.0), parseBytes($0.1)) } ?? (nil, nil)
         // A running container always reports memory + net; if those are missing
@@ -102,18 +103,19 @@ public enum DockerStatsParser {
         let numberPart = String(trimmed[trimmed.startIndex..<split])
         let unitPart = String(trimmed[split...]).trimmingCharacters(in: .whitespaces)
         guard let number = Double(numberPart) else { return nil }
-        let multiplier: Double = switch unitPart {
-        case "B", "": 1
-        case "kB": 1_000
-        case "KiB": 1_024
-        case "MB": 1_000_000
-        case "MiB": 1_048_576
-        case "GB": 1_000_000_000
-        case "GiB": 1_073_741_824
-        case "TB": 1_000_000_000_000
-        case "TiB": 1_099_511_627_776
-        default: 1
-        }
+        let multiplier: Double =
+            switch unitPart {
+            case "B", "": 1
+            case "kB": 1_000
+            case "KiB": 1_024
+            case "MB": 1_000_000
+            case "MiB": 1_048_576
+            case "GB": 1_000_000_000
+            case "GiB": 1_073_741_824
+            case "TB": 1_000_000_000_000
+            case "TiB": 1_099_511_627_776
+            default: 1
+            }
         return number * multiplier
     }
 }

@@ -17,7 +17,8 @@ let args = Array(CommandLine.arguments.dropFirst())
 
 func findUser(_ name: String) throws -> PanelUser {
     guard let user = try store.user(named: name) else {
-        print("no such user: \(name)"); exit(1)
+        print("no such user: \(name)")
+        exit(1)
     }
     return user
 }
@@ -31,12 +32,18 @@ case "list":
     }
 
 case "add-admin", "add-user":
-    guard args.count == 3 else { print("usage: paneltool \(args[0]) USERNAME PASSWORD"); exit(64) }
+    guard args.count == 3 else {
+        print("usage: paneltool \(args[0]) USERNAME PASSWORD")
+        exit(64)
+    }
     let user = try await accounts.createUser(username: args[1], password: args[2], isAdmin: args[0] == "add-admin")
     print("created \(user.username) (admin: \(user.isAdmin))")
 
 case "grant":
-    guard args.count == 4 else { print("usage: paneltool grant USERNAME CONTAINER view,power,files,console"); exit(64) }
+    guard args.count == 4 else {
+        print("usage: paneltool grant USERNAME CONTAINER view,power,files,console")
+        exit(64)
+    }
     let user = try findUser(args[1])
     let perms = Set(args[3].split(separator: ",").map(String.init))
     let grant = ContainerGrant(
@@ -49,7 +56,9 @@ case "grant":
 
 case "audit":
     for entry in try store.listAudit(limit: 50).reversed() {
-        print("\(entry.timestamp)  \(entry.username)  \(entry.action)  \(entry.containerName ?? "-")  \(entry.outcome)  \(entry.sourceIP ?? "-")")
+        print(
+            "\(entry.timestamp)  \(entry.username)  \(entry.action)  \(entry.containerName ?? "-")  \(entry.outcome)  \(entry.sourceIP ?? "-")"
+        )
     }
 
 default:

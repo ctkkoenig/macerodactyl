@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import MacerodactylKit
 
 @Suite struct HealthParsingTests {
@@ -58,7 +59,11 @@ import Testing
 
     @Test func parsesJSONLines() {
         let output = [
-            psLine(name: "web-1", labels: "com.docker.compose.project=web,com.docker.compose.service=nginx,com.docker.compose.project.working_dir=/tmp/stacks/web"),
+            psLine(
+                name: "web-1",
+                labels:
+                    "com.docker.compose.project=web,com.docker.compose.service=nginx,com.docker.compose.project.working_dir=/tmp/stacks/web"
+            ),
             psLine(name: "loner", state: "exited", status: "Exited (1) 2 hours ago"),
             "not json at all",
         ].joined(separator: "\n")

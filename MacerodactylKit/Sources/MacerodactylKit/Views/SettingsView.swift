@@ -32,9 +32,11 @@ public struct MacerodactylSettingsView: View {
                     Button("Choose…") { chooseFile(into: $dockerOverride) }
                     Button("Apply") { applyDockerOverride() }
                 }
-                Text("Leave blank to auto-detect: ~/.orbstack/bin, /opt/homebrew/bin, then /usr/local/bin. Docker Desktop installs the last one.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "Leave blank to auto-detect: ~/.orbstack/bin, /opt/homebrew/bin, then /usr/local/bin. Docker Desktop installs the last one."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Section("Stacks folder") {
@@ -74,8 +76,11 @@ public struct MacerodactylSettingsView: View {
             Section("Scheduled restarts") {
                 if staleCount > 0 {
                     HStack {
-                        Label("\(staleCount) schedule\(staleCount == 1 ? "" : "s") point at a docker path that changed.", systemImage: "wrench.and.screwdriver")
-                            .foregroundStyle(.orange)
+                        Label(
+                            "\(staleCount) schedule\(staleCount == 1 ? "" : "s") point at a docker path that changed.",
+                            systemImage: "wrench.and.screwdriver"
+                        )
+                        .foregroundStyle(.orange)
                         Spacer()
                         Button("Repair all") { repairSchedules() }
                             .buttonStyle(.borderedProminent)
@@ -119,7 +124,8 @@ public struct MacerodactylSettingsView: View {
 
     private func refreshStaleCount() {
         guard let path = store.cli?.binary.path,
-              let service = try? ScheduleService(dockerPath: path) else {
+            let service = try? ScheduleService(dockerPath: path)
+        else {
             staleCount = 0
             return
         }
@@ -128,7 +134,8 @@ public struct MacerodactylSettingsView: View {
 
     private func repairSchedules() {
         guard let path = store.cli?.binary.path,
-              let service = try? ScheduleService(dockerPath: path) else { return }
+            let service = try? ScheduleService(dockerPath: path)
+        else { return }
         do {
             let repaired = try service.repairAll()
             repairMessage = repaired.isEmpty ? "Nothing needed repair." : "Repaired: \(repaired.joined(separator: ", "))."

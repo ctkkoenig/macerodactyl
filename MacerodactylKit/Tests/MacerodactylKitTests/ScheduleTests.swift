@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import MacerodactylKit
 
 @Suite struct ScheduleTests {
@@ -54,10 +55,11 @@ import Testing
         defer { cleanup() }
         let schedule = RestartSchedule(containerName: "bot", hour: 6, minute: 0, weekdays: [1, 5])
         let intervals = service.plistDictionary(for: schedule)["StartCalendarInterval"] as? [[String: Int]]
-        #expect(intervals == [
-            ["Weekday": 1, "Hour": 6, "Minute": 0],
-            ["Weekday": 5, "Hour": 6, "Minute": 0],
-        ])
+        #expect(
+            intervals == [
+                ["Weekday": 1, "Hour": 6, "Minute": 0],
+                ["Weekday": 5, "Hour": 6, "Minute": 0],
+            ])
         #expect(schedule.timeDescription == "Mon, Fri at 06:00")
     }
 
@@ -130,8 +132,9 @@ import Testing
             launchAgentsDirectory: service.launchAgentsDirectory,
             logsDirectory: service.logsDirectory, managesLaunchd: false
         )
-        #expect(elsewhere.health(forContainerName: "bot")
-            == .binaryOutdated(installed: realBinary.path, current: "/somewhere/else/docker"))
+        #expect(
+            elsewhere.health(forContainerName: "bot")
+                == .binaryOutdated(installed: realBinary.path, current: "/somewhere/else/docker"))
     }
 
     @Test func missingPerlDropsWrapperButStillSchedules() throws {
@@ -144,7 +147,7 @@ import Testing
         #expect(args == ["/fake/resolved/bin/docker", "restart", "bot"])
         #expect(!args.contains("/usr/bin/perl"))
         // docker-path parsing still finds it for health/repair.
-        #expect(service.installedDockerPath(forContainerName: "bot") == nil) // not installed yet
+        #expect(service.installedDockerPath(forContainerName: "bot") == nil)  // not installed yet
         try service.install(RestartSchedule(containerName: "bot", hour: 3, minute: 0))
         #expect(service.installedDockerPath(forContainerName: "bot") == "/fake/resolved/bin/docker")
     }
@@ -209,7 +212,7 @@ import Testing
         let out = service.logsDirectory.appending(path: "\(schedule.label).out.log")
         let err = service.logsDirectory.appending(path: "\(schedule.label).err.log")
 
-        #expect(service.lastResult(for: schedule) == nil) // never run
+        #expect(service.lastResult(for: schedule) == nil)  // never run
 
         try Data("bot\n".utf8).write(to: out)
         let success = try #require(service.lastResult(for: schedule))
@@ -243,7 +246,8 @@ import Testing
         // This is neither a docker daemon error nor silence — it must read as
         // its own state, not the same as .failed.
         Thread.sleep(forTimeInterval: 0.05)
-        let markerLine = "\(ScheduleService.timeoutMarker) after 60s (docker did not respond; the daemon may be down or the socket is stale)\n"
+        let markerLine =
+            "\(ScheduleService.timeoutMarker) after 60s (docker did not respond; the daemon may be down or the socket is stale)\n"
         try Data(markerLine.utf8).write(to: err)
         let result = try #require(service.lastResult(for: schedule))
         #expect(result.outcome == .timedOut)

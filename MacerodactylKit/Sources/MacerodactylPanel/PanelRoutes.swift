@@ -54,7 +54,10 @@ struct PanelRoutes {
 
     // MARK: Auth
 
-    struct LoginBody: Decodable { let username: String; let password: String }
+    struct LoginBody: Decodable {
+        let username: String
+        let password: String
+    }
 
     @Sendable func login(_ request: Request, context: PanelRequestContext) async throws -> Response {
         let ip = context.clientIP
@@ -65,15 +68,17 @@ struct PanelRoutes {
 
         let decision = await rateLimiter.check(username: body.username, ip: ip)
         guard decision.allowed else {
-            audit(user: body.username, action: "login.ratelimited", outcome: "blocked", ip: ip,
-                  detail: "retry after \(Int(decision.retryAfter))s")
+            audit(
+                user: body.username, action: "login.ratelimited", outcome: "blocked", ip: ip,
+                detail: "retry after \(Int(decision.retryAfter))s")
             var response = json(["error": "Too many attempts. Try again later."], status: .tooManyRequests)
             response.headers[.retryAfter] = String(Int(decision.retryAfter.rounded(.up)))
             return response
         }
 
         guard let user = try? store.user(named: body.username),
-              await PasswordHasher.verify(body.password, hash: user.passwordHash) else {
+            await PasswordHasher.verify(body.password, hash: user.passwordHash)
+        else {
             await rateLimiter.recordFailure(username: body.username, ip: ip)
             audit(user: body.username, action: "login.failure", outcome: "denied", ip: ip)
             return json(["error": "Invalid username or password"], status: .unauthorized)
@@ -165,16 +170,17 @@ struct PanelRoutes {
         guard let container = await containers.container(named: name) else { throw notFound() }
         let engine = try store.authorizationEngine(for: user)
         audit(user: user.username, action: "container.view", container: name, outcome: "ok", ip: context.clientIP)
-        return encode(ContainerDetail(
-            name: container.name, image: container.image, status: container.status,
-            state: container.state.rawValue, ports: container.ports, running: container.isRunning,
-            health: container.health?.rawValue, stack: container.composeProject,
-            permissions: .init(
-                view: engine.can(.view, containerNamed: name), power: engine.can(.power, containerNamed: name),
-                files: engine.can(.files, containerNamed: name), console: engine.can(.console, containerNamed: name)
-            ),
-            filesAvailable: await containers.fileService(containerName: name) != nil
-        ))
+        return encode(
+            ContainerDetail(
+                name: container.name, image: container.image, status: container.status,
+                state: container.state.rawValue, ports: container.ports, running: container.isRunning,
+                health: container.health?.rawValue, stack: container.composeProject,
+                permissions: .init(
+                    view: engine.can(.view, containerNamed: name), power: engine.can(.power, containerNamed: name),
+                    files: engine.can(.files, containerNamed: name), console: engine.can(.console, containerNamed: name)
+                ),
+                filesAvailable: await containers.fileService(containerName: name) != nil
+            ))
     }
 
     // MARK: Power
@@ -185,18 +191,21 @@ struct PanelRoutes {
         let user = try context.requireIdentity()
         let name = try context.parameters.require("name")
         guard let body = try? await request.decode(as: PowerBody.self, context: context),
-              let action = ContainerStore.PowerAction(rawValue: body.action) else {
+            let action = ContainerStore.PowerAction(rawValue: body.action)
+        else {
             return json(["error": "action must be start, stop, or restart"], status: .badRequest)
         }
         guard await containers.container(named: name) != nil else { throw notFound() }
         do {
             try await containers.power(action, containerName: name)
-            audit(user: user.username, action: "container.power", container: name, outcome: "ok",
-                  ip: context.clientIP, detail: action.rawValue)
+            audit(
+                user: user.username, action: "container.power", container: name, outcome: "ok",
+                ip: context.clientIP, detail: action.rawValue)
             return json(["ok": true])
         } catch {
-            audit(user: user.username, action: "container.power", container: name, outcome: "error",
-                  ip: context.clientIP, detail: "\(action.rawValue): \(error)")
+            audit(
+                user: user.username, action: "container.power", container: name, outcome: "error",
+                ip: context.clientIP, detail: "\(action.rawValue): \(error)")
             return json(["error": "\(error)"], status: .internalServerError)
         }
     }
@@ -218,9 +227,14 @@ struct PanelRoutes {
         let cpuPercent, memUsedBytes, memLimitBytes, memPercent, netRxBytes, netTxBytes: Double
         let pids: Int
         init(_ s: ContainerStats) {
-            name = s.name; cpuPercent = s.cpuPercent; memUsedBytes = s.memUsedBytes
-            memLimitBytes = s.memLimitBytes; memPercent = s.memPercent
-            netRxBytes = s.netRxBytes; netTxBytes = s.netTxBytes; pids = s.pids
+            name = s.name
+            cpuPercent = s.cpuPercent
+            memUsedBytes = s.memUsedBytes
+            memLimitBytes = s.memLimitBytes
+            memPercent = s.memPercent
+            netRxBytes = s.netRxBytes
+            netTxBytes = s.netTxBytes
+            pids = s.pids
         }
     }
 
@@ -284,18 +298,23 @@ struct PanelRoutes {
                         continuation.yield(ByteBuffer(string: ": ping\n\n"))
                     }
                 }
-                continuation.onTermination = { _ in producer.cancel(); heartbeat.cancel() }
+                continuation.onTermination = { _ in
+                    producer.cancel()
+                    heartbeat.cancel()
+                }
             }
             do {
                 for try await event in events { try await writer.write(event) }
             } catch {}
             try? await writer.finish(nil)
         }
-        return Response(status: .ok, headers: [
-            .contentType: "text/event-stream",
-            .cacheControl: "no-cache",
-            .connection: "keep-alive",
-        ], body: body)
+        return Response(
+            status: .ok,
+            headers: [
+                .contentType: "text/event-stream",
+                .cacheControl: "no-cache",
+                .connection: "keep-alive",
+            ], body: body)
     }
 
     // MARK: Schedules (gated on the schedules permission)
@@ -305,9 +324,17 @@ struct PanelRoutes {
         let weekdays: [Int]
         let description: String
         let lastRun: LastRun?
-        struct LastRun: Encodable { let date: String; let outcome: String; let message: String }
+        struct LastRun: Encodable {
+            let date: String
+            let outcome: String
+            let message: String
+        }
     }
-    struct ScheduleBody: Decodable { let hour: Int; let minute: Int; let weekdays: [Int]? }
+    struct ScheduleBody: Decodable {
+        let hour: Int
+        let minute: Int
+        let weekdays: [Int]?
+    }
 
     @Sendable func apiScheduleGet(_ request: Request, context: PanelRequestContext) async throws -> Response {
         let name = try context.parameters.require("name")
@@ -328,18 +355,22 @@ struct PanelRoutes {
         let name = try context.parameters.require("name")
         guard await containers.container(named: name) != nil else { throw notFound() }
         guard let body = try? await request.decode(as: ScheduleBody.self, context: context),
-              (0...23).contains(body.hour), (0...59).contains(body.minute) else {
+            (0...23).contains(body.hour), (0...59).contains(body.minute)
+        else {
             return json(["error": "hour 0–23 and minute 0–59 required"], status: .badRequest)
         }
         do {
-            try await containers.setSchedule(containerName: name, hour: body.hour, minute: body.minute,
-                                             weekdays: Set(body.weekdays ?? []))
-            audit(user: user.username, action: "container.schedules", container: name, outcome: "ok",
-                  ip: context.clientIP, detail: "set \(String(format: "%02d:%02d", body.hour, body.minute))")
+            try await containers.setSchedule(
+                containerName: name, hour: body.hour, minute: body.minute,
+                weekdays: Set(body.weekdays ?? []))
+            audit(
+                user: user.username, action: "container.schedules", container: name, outcome: "ok",
+                ip: context.clientIP, detail: "set \(String(format: "%02d:%02d", body.hour, body.minute))")
             return json(["ok": true])
         } catch {
-            audit(user: user.username, action: "container.schedules", container: name, outcome: "error",
-                  ip: context.clientIP, detail: "\(error)")
+            audit(
+                user: user.username, action: "container.schedules", container: name, outcome: "error",
+                ip: context.clientIP, detail: "\(error)")
             return json(["error": "\(error)"], status: .internalServerError)
         }
     }
@@ -350,8 +381,9 @@ struct PanelRoutes {
         guard await containers.container(named: name) != nil else { throw notFound() }
         do {
             try await containers.removeSchedule(containerName: name)
-            audit(user: user.username, action: "container.schedules", container: name, outcome: "ok",
-                  ip: context.clientIP, detail: "removed")
+            audit(
+                user: user.username, action: "container.schedules", container: name, outcome: "ok",
+                ip: context.clientIP, detail: "removed")
             return json(["ok": true])
         } catch {
             return json(["error": "\(error)"], status: .internalServerError)
@@ -359,7 +391,11 @@ struct PanelRoutes {
     }
 
     private func outcomeString(_ outcome: ScheduleOutcome) -> String {
-        switch outcome { case .success: "ok"; case .failed: "failed"; case .timedOut: "timedOut" }
+        switch outcome {
+        case .success: "ok"
+        case .failed: "failed"
+        case .timedOut: "timedOut"
+        }
     }
 
     // MARK: Console
@@ -375,15 +411,23 @@ struct PanelRoutes {
         guard let entry = await containers.runConsole(containerName: name, command: body.command) else {
             throw notFound()
         }
-        audit(user: user.username, action: "container.console", container: name,
-              outcome: entry.isError ? "error" : "ok", ip: context.clientIP, detail: body.command)
+        audit(
+            user: user.username, action: "container.console", container: name,
+            outcome: entry.isError ? "error" : "ok", ip: context.clientIP, detail: body.command)
         return encode(ConsoleResult(command: entry.command, output: entry.output, isError: entry.isError))
     }
-    struct ConsoleResult: Encodable { let command, output: String; let isError: Bool }
+    struct ConsoleResult: Encodable {
+        let command, output: String
+        let isError: Bool
+    }
 
     // MARK: Files
 
-    struct FileEntryDTO: Encodable { let name, path: String; let isDirectory: Bool; let size: Int }
+    struct FileEntryDTO: Encodable {
+        let name, path: String
+        let isDirectory: Bool
+        let size: Int
+    }
 
     @Sendable func apiFilesList(_ request: Request, context: PanelRequestContext) async throws -> Response {
         let (name, service) = try await fileService(context)
@@ -405,31 +449,39 @@ struct PanelRoutes {
         }
         do {
             let content = try service.read(path)
-            audit(user: try context.requireIdentity().username, action: "container.files", container: name,
-                  outcome: "ok", ip: context.clientIP, detail: "read \(path)")
+            audit(
+                user: try context.requireIdentity().username, action: "container.files", container: name,
+                outcome: "ok", ip: context.clientIP, detail: "read \(path)")
             return encode(FileContentDTO(path: path, text: content.text, lineEnding: content.lineEnding.rawValue))
         } catch {
-            return fileError(error, user: try context.requireIdentity().username, container: name, ip: context.clientIP, detail: "read \(path)")
+            return fileError(
+                error, user: try context.requireIdentity().username, container: name, ip: context.clientIP, detail: "read \(path)")
         }
     }
     struct FileContentDTO: Encodable { let path, text, lineEnding: String }
 
-    struct FileWriteBody: Decodable { let text: String; let lineEnding: String? }
+    struct FileWriteBody: Decodable {
+        let text: String
+        let lineEnding: String?
+    }
 
     @Sendable func apiFileWrite(_ request: Request, context: PanelRequestContext) async throws -> Response {
         let (name, service) = try await fileService(context)
         guard let path = request.uri.queryParameters["path"].map(String.init),
-              let body = try? await request.decode(as: FileWriteBody.self, context: context) else {
+            let body = try? await request.decode(as: FileWriteBody.self, context: context)
+        else {
             return json(["error": "path and text required"], status: .badRequest)
         }
         let ending = LineEnding(rawValue: body.lineEnding ?? "lf") ?? .lf
         do {
             try service.write(path, text: body.text, lineEnding: ending)
-            audit(user: try context.requireIdentity().username, action: "container.files", container: name,
-                  outcome: "ok", ip: context.clientIP, detail: "write \(path)")
+            audit(
+                user: try context.requireIdentity().username, action: "container.files", container: name,
+                outcome: "ok", ip: context.clientIP, detail: "write \(path)")
             return json(["ok": true])
         } catch {
-            return fileError(error, user: try context.requireIdentity().username, container: name, ip: context.clientIP, detail: "write \(path)")
+            return fileError(
+                error, user: try context.requireIdentity().username, container: name, ip: context.clientIP, detail: "write \(path)")
         }
     }
 
@@ -443,14 +495,16 @@ struct PanelRoutes {
     }
 
     private func fileError(_ error: Error, user: String, container: String, ip: String, detail: String? = nil) -> Response {
-        try? store.recordAudit(username: user, action: "container.files", containerName: container,
-                              outcome: "denied", sourceIP: ip, detail: detail)
-        let status: HTTPResponse.Status = switch error {
-        case FileServiceError.escapesRoot, FileServiceError.invalidPath: .forbidden
-        case FileServiceError.notFound: .notFound
-        case FileServiceError.tooLarge, FileServiceError.binaryFile: .unprocessableContent
-        default: .badRequest
-        }
+        try? store.recordAudit(
+            username: user, action: "container.files", containerName: container,
+            outcome: "denied", sourceIP: ip, detail: detail)
+        let status: HTTPResponse.Status =
+            switch error {
+            case FileServiceError.escapesRoot, FileServiceError.invalidPath: .forbidden
+            case FileServiceError.notFound: .notFound
+            case FileServiceError.tooLarge, FileServiceError.binaryFile: .unprocessableContent
+            default: .badRequest
+            }
         return json(["error": FileServiceMessage.describe(error)], status: status)
     }
 
@@ -462,8 +516,9 @@ struct PanelRoutes {
     private func notFound() -> HTTPError { HTTPError(.notFound) }
 
     private func audit(user: String, action: String, container: String? = nil, outcome: String, ip: String, detail: String? = nil) {
-        try? store.recordAudit(username: user, action: action, containerName: container,
-                               outcome: outcome, sourceIP: ip, detail: detail)
+        try? store.recordAudit(
+            username: user, action: action, containerName: container,
+            outcome: outcome, sourceIP: ip, detail: detail)
     }
 
     private func sessionCookie(token: String) -> Cookie {
@@ -471,9 +526,9 @@ struct PanelRoutes {
             name: PanelSession.cookieName, value: token,
             maxAge: PanelSession.lifetimeDays * 86_400,
             path: "/",
-            secure: false,      // plain HTTP hop behind the tunnel
-            httpOnly: true,     // not visible to page scripts
-            sameSite: .lax      // Lax, not Strict: survives the top-level return from Cloudflare Access
+            secure: false,  // plain HTTP hop behind the tunnel
+            httpOnly: true,  // not visible to page scripts
+            sameSite: .lax  // Lax, not Strict: survives the top-level return from Cloudflare Access
         )
     }
 
@@ -486,14 +541,16 @@ struct PanelRoutes {
     }
 
     private func html(_ body: String) -> Response {
-        Response(status: .ok, headers: [.contentType: "text/html; charset=utf-8"],
-                 body: .init(byteBuffer: ByteBuffer(string: body)))
+        Response(
+            status: .ok, headers: [.contentType: "text/html; charset=utf-8"],
+            body: .init(byteBuffer: ByteBuffer(string: body)))
     }
 
     private func json(_ object: [String: some Encodable & Sendable], status: HTTPResponse.Status = .ok) -> Response {
         let data = (try? JSONSerialization.data(withJSONObject: object.mapValues { anyify($0) })) ?? Data("{}".utf8)
-        return Response(status: status, headers: [.contentType: "application/json"],
-                        body: .init(byteBuffer: ByteBuffer(data: data)))
+        return Response(
+            status: status, headers: [.contentType: "application/json"],
+            body: .init(byteBuffer: ByteBuffer(data: data)))
     }
 
     private func anyify(_ value: some Encodable) -> Any {
@@ -504,7 +561,8 @@ struct PanelRoutes {
 
     private func encode(_ value: some Encodable, status: HTTPResponse.Status = .ok) -> Response {
         let data = (try? JSONEncoder().encode(value)) ?? Data("{}".utf8)
-        return Response(status: status, headers: [.contentType: "application/json"],
-                        body: .init(byteBuffer: ByteBuffer(data: data)))
+        return Response(
+            status: status, headers: [.contentType: "application/json"],
+            body: .init(byteBuffer: ByteBuffer(data: data)))
     }
 }

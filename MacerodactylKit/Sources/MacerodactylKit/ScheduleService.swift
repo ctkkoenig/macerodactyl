@@ -213,8 +213,9 @@ public struct ScheduleService: Sendable {
         // "No such process" from bootout just means it wasn't loaded; any
         // other launchctl failure with the plist now gone is worth surfacing.
         if case .failure(let error as ScheduleError) = bootoutResult,
-           case .launchctlFailed(let message) = error,
-           !message.contains("No such process"), !message.contains("not find") {
+            case .launchctlFailed(let message) = error,
+            !message.contains("No such process"), !message.contains("not find")
+        {
             throw error
         }
     }
@@ -235,10 +236,11 @@ public struct ScheduleService: Sendable {
 
     func parse(plistAt url: URL) -> RestartSchedule? {
         guard let data = try? Data(contentsOf: url),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let arguments = plist["ProgramArguments"] as? [String],
-              let restartIndex = arguments.firstIndex(of: "restart"),
-              restartIndex + 1 < arguments.count else { return nil }
+            let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+            let arguments = plist["ProgramArguments"] as? [String],
+            let restartIndex = arguments.firstIndex(of: "restart"),
+            restartIndex + 1 < arguments.count
+        else { return nil }
         let name = arguments[restartIndex + 1]
         if let interval = plist["StartCalendarInterval"] as? [String: Int] {
             return RestartSchedule(
@@ -266,8 +268,9 @@ public struct ScheduleService: Sendable {
     public func installedDockerPath(forContainerName name: String) -> String? {
         let schedule = RestartSchedule(containerName: name, hour: 0, minute: 0)
         guard let data = try? Data(contentsOf: plistPath(for: schedule)),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let arguments = plist["ProgramArguments"] as? [String] else { return nil }
+            let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+            let arguments = plist["ProgramArguments"] as? [String]
+        else { return nil }
         return Self.dockerPath(inProgramArguments: arguments)
     }
 
@@ -322,7 +325,7 @@ public struct ScheduleService: Sendable {
     public func repairAll() throws -> [String] {
         var repaired: [String] = []
         for schedule in schedulesNeedingRepair() {
-            try install(schedule) // rewrites with current dockerPath + perlPath
+            try install(schedule)  // rewrites with current dockerPath + perlPath
             repaired.append(schedule.containerName)
         }
         return repaired
@@ -359,10 +362,12 @@ public struct ScheduleService: Sendable {
 
     private func logInfo(_ url: URL) -> (date: Date, lastLine: String)? {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let date = attributes[.modificationDate] as? Date,
-              let size = attributes[.size] as? Int, size > 0,
-              let data = try? Data(contentsOf: url) else { return nil }
-        let lastLine = String(decoding: data.suffix(2048), as: UTF8.self)
+            let date = attributes[.modificationDate] as? Date,
+            let size = attributes[.size] as? Int, size > 0,
+            let data = try? Data(contentsOf: url)
+        else { return nil }
+        let lastLine =
+            String(decoding: data.suffix(2048), as: UTF8.self)
             .split(separator: "\n").last.map(String.init) ?? ""
         return (date, lastLine)
     }

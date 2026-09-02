@@ -101,7 +101,9 @@ public final class PanelAdminModel {
         Task {
             do {
                 _ = try await accounts.createUser(username: newUsername, password: newPassword, isAdmin: newIsAdmin)
-                newUsername = ""; newPassword = ""; newIsAdmin = false
+                newUsername = ""
+                newPassword = ""
+                newIsAdmin = false
                 reload()
             } catch {
                 accountError = "Couldn’t create account (username may be taken)."

@@ -118,7 +118,8 @@ public enum PanelSchema {
 
     public static func migrate(_ db: Database) throws {
         if db.userVersion < 1 {
-            try db.execute("""
+            try db.execute(
+                """
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -243,7 +244,8 @@ public final class PanelDataStore: Sendable {
                 [.integer(userID), .text(containerName)]
             )
         } else {
-            try db.run("""
+            try db.run(
+                """
                 INSERT INTO grants (user_id, container_name, perm_view, perm_power, perm_files, perm_console, perm_schedules)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id, container_name) DO UPDATE SET
@@ -251,10 +253,12 @@ public final class PanelDataStore: Sendable {
                     perm_files=excluded.perm_files, perm_console=excluded.perm_console,
                     perm_schedules=excluded.perm_schedules
                 """,
-                [.integer(userID), .text(containerName),
-                 .integer(grant.view ? 1 : 0), .integer(grant.power ? 1 : 0),
-                 .integer(grant.files ? 1 : 0), .integer(grant.console ? 1 : 0),
-                 .integer(grant.schedules ? 1 : 0)]
+                [
+                    .integer(userID), .text(containerName),
+                    .integer(grant.view ? 1 : 0), .integer(grant.power ? 1 : 0),
+                    .integer(grant.files ? 1 : 0), .integer(grant.console ? 1 : 0),
+                    .integer(grant.schedules ? 1 : 0),
+                ]
             )
         }
     }
@@ -289,7 +293,8 @@ public final class PanelDataStore: Sendable {
     }
 
     public func sessionUser(tokenHash: String, now: String) throws -> PanelUser? {
-        let rows = try db.query("""
+        let rows = try db.query(
+            """
             SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
             WHERE s.token_hash = ? AND s.expires_at > ?
             """, [.text(tokenHash), .text(now)])
@@ -310,15 +315,18 @@ public final class PanelDataStore: Sendable {
         username: String, action: String, containerName: String?,
         outcome: String, sourceIP: String?, detail: String? = nil
     ) throws {
-        try db.run("""
+        try db.run(
+            """
             INSERT INTO audit (username, action, container_name, outcome, source_ip, detail)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            [.text(username), .text(action),
-             containerName.map(SQLValue.text) ?? .null,
-             .text(outcome),
-             sourceIP.map(SQLValue.text) ?? .null,
-             detail.map(SQLValue.text) ?? .null]
+            [
+                .text(username), .text(action),
+                containerName.map(SQLValue.text) ?? .null,
+                .text(outcome),
+                sourceIP.map(SQLValue.text) ?? .null,
+                detail.map(SQLValue.text) ?? .null,
+            ]
         )
     }
 

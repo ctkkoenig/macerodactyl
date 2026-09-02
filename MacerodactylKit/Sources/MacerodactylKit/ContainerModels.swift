@@ -96,7 +96,8 @@ public enum DockerPSParser {
         let decoder = JSONDecoder()
         return output.split(separator: "\n").compactMap { line -> DockerContainer? in
             guard let data = line.data(using: .utf8),
-                  let ps = try? decoder.decode(PSLine.self, from: data) else { return nil }
+                let ps = try? decoder.decode(PSLine.self, from: data)
+            else { return nil }
             let labels = parseLabels(ps.Labels ?? "")
             return DockerContainer(
                 id: ps.ID,
@@ -162,7 +163,8 @@ public enum DockerPSParser {
                 unmanaged.append(container)
             }
         }
-        let stacks = byProject
+        let stacks =
+            byProject
             .map { name, members in
                 ContainerStack(
                     name: name,

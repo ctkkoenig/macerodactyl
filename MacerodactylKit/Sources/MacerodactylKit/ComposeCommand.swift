@@ -43,7 +43,8 @@ public enum ComposeCommand: Sendable, Equatable {
             return .plugin(dockerBinary: dockerBinary)
         }
         if let standalone = standaloneCandidates(besideDocker: dockerBinary)
-            .first(where: { fileManager.isExecutableFile(atPath: $0.path) }) {
+            .first(where: { fileManager.isExecutableFile(atPath: $0.path) })
+        {
             return .standalone(binary: standalone)
         }
         return nil

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import MacerodactylKit
 
 @Suite struct ByteParsingTests {
@@ -73,7 +74,7 @@ import Testing
     @Test func computesMemPercentWhenAbsent() {
         let json = line(["Name": "x", "CPUPerc": "0%", "MemUsage": "50MiB / 200MiB", "NetIO": "0B / 0B", "PIDs": "1"])
         let stats = DockerStatsParser.parse(line: json)
-        #expect(stats?.memPercent == 25) // 50/200
+        #expect(stats?.memPercent == 25)  // 50/200
     }
 }
 
@@ -82,6 +83,6 @@ import Testing
         #expect(ContainerStore.PowerAction.kill.isDestructive)
         #expect(!ContainerStore.PowerAction.stop.isDestructive)
         #expect(ContainerStore.PowerAction.allCases.contains(.kill))
-        #expect(ContainerStore.PowerAction.kill.rawValue == "kill") // maps to `docker kill`
+        #expect(ContainerStore.PowerAction.kill.rawValue == "kill")  // maps to `docker kill`
     }
 }

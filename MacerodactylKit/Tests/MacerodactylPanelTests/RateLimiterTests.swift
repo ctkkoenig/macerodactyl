@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import MacerodactylPanel
 
 @Suite struct LoginRateLimiterTests {
@@ -26,9 +27,9 @@ import Testing
     @Test func backoffGrowsExponentiallyAndReleases() async {
         let clock = Clock()
         let limiter = LoginRateLimiter(threshold: 1, baseDelay: 10, maxDelay: 600, now: { clock.now })
-        await limiter.recordFailure(username: "bob", ip: "2.2.2.2") // 1 over → 10s
+        await limiter.recordFailure(username: "bob", ip: "2.2.2.2")  // 1 over → 10s
         #expect(await limiter.check(username: "bob", ip: "2.2.2.2").retryAfter == 10)
-        await limiter.recordFailure(username: "bob", ip: "2.2.2.2") // 2 over → 20s
+        await limiter.recordFailure(username: "bob", ip: "2.2.2.2")  // 2 over → 20s
         #expect(await limiter.check(username: "bob", ip: "2.2.2.2").retryAfter == 20)
         // After the lockout elapses, attempts are allowed again.
         clock.advance(21)
@@ -93,6 +94,6 @@ import Testing
         let token = PanelSession.newToken()
         #expect(PanelSession.hashToken(token) == PanelSession.hashToken(token))
         #expect(PanelSession.hashToken(token) != token)
-        #expect(PanelSession.hashToken(token).count == 64) // hex SHA-256
+        #expect(PanelSession.hashToken(token).count == 64)  // hex SHA-256
     }
 }

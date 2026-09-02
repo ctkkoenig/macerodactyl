@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import MacerodactylKit
 
 private func makeContainer(name: String, project: String? = nil, workingDir: String? = nil) -> DockerContainer {
@@ -26,9 +27,11 @@ private func makeContainer(name: String, project: String? = nil, workingDir: Str
     }
 
     @Test func ungrantedContainerIsInvisibleAndUntouchable() {
-        let engine = AuthorizationEngine(isAdmin: false, grants: [
-            "bot": ContainerGrant(view: true, power: true)
-        ])
+        let engine = AuthorizationEngine(
+            isAdmin: false,
+            grants: [
+                "bot": ContainerGrant(view: true, power: true)
+            ])
         #expect(engine.visible(containers).map(\.name) == ["bot"])
         #expect(!engine.canView(containerNamed: "scraper"))
         for permission in ContainerPermission.allCases {
@@ -38,9 +41,11 @@ private func makeContainer(name: String, project: String? = nil, workingDir: Str
     }
 
     @Test func permissionsAreIndependent() {
-        let engine = AuthorizationEngine(isAdmin: false, grants: [
-            "bot": ContainerGrant(view: true, power: false, files: true, console: false)
-        ])
+        let engine = AuthorizationEngine(
+            isAdmin: false,
+            grants: [
+                "bot": ContainerGrant(view: true, power: false, files: true, console: false)
+            ])
         #expect(engine.can(.view, containerNamed: "bot"))
         #expect(!engine.can(.power, containerNamed: "bot"))
         #expect(engine.can(.files, containerNamed: "bot"))
@@ -49,9 +54,11 @@ private func makeContainer(name: String, project: String? = nil, workingDir: Str
 
     @Test func nothingWorksWithoutView() {
         // A malformed grant (power without view) must not leak anything.
-        let engine = AuthorizationEngine(isAdmin: false, grants: [
-            "bot": ContainerGrant(view: false, power: true, files: true, console: true)
-        ])
+        let engine = AuthorizationEngine(
+            isAdmin: false,
+            grants: [
+                "bot": ContainerGrant(view: false, power: true, files: true, console: true)
+            ])
         #expect(engine.visible(containers).isEmpty)
         for permission in ContainerPermission.allCases {
             #expect(!engine.can(permission, containerNamed: "bot"))
@@ -60,9 +67,11 @@ private func makeContainer(name: String, project: String? = nil, workingDir: Str
 
     @Test func groupFilteringDropsEmptyStacks() {
         let groups = DockerPSParser.group(containers)
-        let engine = AuthorizationEngine(isAdmin: false, grants: [
-            "scraper": ContainerGrant(view: true)
-        ])
+        let engine = AuthorizationEngine(
+            isAdmin: false,
+            grants: [
+                "scraper": ContainerGrant(view: true)
+            ])
         let filtered = engine.visible(groups)
         #expect(filtered.stacks.map(\.name) == ["scraper"])
         #expect(filtered.unmanaged.isEmpty)
@@ -83,8 +92,9 @@ private func makeContainer(name: String, project: String? = nil, workingDir: Str
         #expect(try store.hasAnyUser())
         #expect(try store.user(named: "alice")?.id == user.id)
 
-        try store.setGrant(userID: user.id, containerName: "bot",
-                           grant: ContainerGrant(view: true, power: true))
+        try store.setGrant(
+            userID: user.id, containerName: "bot",
+            grant: ContainerGrant(view: true, power: true))
         let engine = try store.authorizationEngine(for: user)
         #expect(engine.can(.power, containerNamed: "bot"))
         #expect(!engine.can(.files, containerNamed: "bot"))
@@ -106,8 +116,9 @@ private func makeContainer(name: String, project: String? = nil, workingDir: Str
         try store.deleteSession(tokenHash: "t1")
         #expect(try store.sessionUser(tokenHash: "t1", now: now) == nil)
 
-        try store.recordAudit(username: "bob", action: "power.stop", containerName: "bot",
-                              outcome: "ok", sourceIP: "203.0.113.9")
+        try store.recordAudit(
+            username: "bob", action: "power.stop", containerName: "bot",
+            outcome: "ok", sourceIP: "203.0.113.9")
         let entries = try store.listAudit()
         #expect(entries.count == 1)
         #expect(entries.first?.action == "power.stop")

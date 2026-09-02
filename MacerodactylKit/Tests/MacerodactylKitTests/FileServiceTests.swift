@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import MacerodactylKit
 
 /// The Phase 1 suites proved PathConfinement in isolation; these prove the
@@ -34,8 +35,9 @@ import Testing
             composeWorkingDir: stackDir.path
         )
         let service = try #require(FileService(container: container, stacksRoot: stacksRoot))
-        return Fixture(stacksRoot: stacksRoot, stackDir: stackDir, outside: outside,
-                       service: service, cleanup: { try? fm.removeItem(at: base) })
+        return Fixture(
+            stacksRoot: stacksRoot, stackDir: stackDir, outside: outside,
+            service: service, cleanup: { try? fm.removeItem(at: base) })
     }
 
     // MARK: Availability gate
@@ -139,10 +141,12 @@ import Testing
         defer { fixture.cleanup() }
         let big = Data(repeating: UInt8(ascii: "a"), count: FileService.maxEditableBytes + 1)
         try big.write(to: fixture.stackDir.appending(path: "big.log"))
-        #expect(throws: FileServiceError.tooLarge(
-            actualBytes: FileService.maxEditableBytes + 1,
-            limitBytes: FileService.maxEditableBytes
-        )) {
+        #expect(
+            throws: FileServiceError.tooLarge(
+                actualBytes: FileService.maxEditableBytes + 1,
+                limitBytes: FileService.maxEditableBytes
+            )
+        ) {
             _ = try fixture.service.read("big.log")
         }
     }
@@ -165,7 +169,7 @@ import Testing
 
         let content = try fixture.service.read("win.ini")
         #expect(content.lineEnding == .crlf)
-        #expect(content.text == "line one\nline two\n") // normalized for the editor
+        #expect(content.text == "line one\nline two\n")  // normalized for the editor
 
         try fixture.service.write("win.ini", text: content.text + "line three\n", lineEnding: content.lineEnding)
         let raw = try Data(contentsOf: fixture.stackDir.appending(path: "win.ini"))

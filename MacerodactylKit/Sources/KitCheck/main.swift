@@ -47,7 +47,10 @@ func listContainers() async {
 
 switch arguments.dropFirst().first {
 case "start", "stop", "restart":
-    guard arguments.count == 3 else { print("usage: kitcheck \(arguments[1]) NAME"); exit(64) }
+    guard arguments.count == 3 else {
+        print("usage: kitcheck \(arguments[1]) NAME")
+        exit(64)
+    }
     do {
         try await cli.run([arguments[1], arguments[2]], timeout: .seconds(120))
         print("\(arguments[1]) \(arguments[2]): ok")
@@ -98,12 +101,18 @@ case "logs":
     }
 
 case "exec":
-    guard arguments.count == 4 else { print("usage: kitcheck exec NAME CMDLINE"); exit(64) }
+    guard arguments.count == 4 else {
+        print("usage: kitcheck exec NAME CMDLINE")
+        exit(64)
+    }
     let entry = await ExecConsole(containerID: arguments[2], cli: cli).run(arguments[3])
     print("$ \(entry.command)\n\(entry.output)\(entry.isError ? "  [error]" : "")")
 
 case "rcon":
-    guard arguments.count == 4 else { print("usage: kitcheck rcon NAME CMDLINE"); exit(64) }
+    guard arguments.count == 4 else {
+        print("usage: kitcheck rcon NAME CMDLINE")
+        exit(64)
+    }
     switch await MinecraftRCON.detect(containerID: arguments[2], cli: cli) {
     case .notMinecraft:
         print("not a Minecraft container")
@@ -128,7 +137,10 @@ case "rcon":
 
 case "files":
     // kitcheck files NAME list|read DIR/PATH  or  kitcheck files NAME write PATH TEXT
-    guard arguments.count >= 4 else { print("usage: kitcheck files NAME list|read|write PATH [TEXT]"); exit(64) }
+    guard arguments.count >= 4 else {
+        print("usage: kitcheck files NAME list|read|write PATH [TEXT]")
+        exit(64)
+    }
     let name = arguments[2]
     let output = try await cli.run(["ps", "-a", "--no-trunc", "--format", "{{json .}}"], timeout: .seconds(15))
     guard let container = DockerPSParser.parse(output).first(where: { $0.name == name }) else {
@@ -184,7 +196,10 @@ case "schedule-install":
     print("installed \(schedule.label) (\(schedule.timeDescription))")
 
 case "schedule-status":
-    guard arguments.count == 3 else { print("usage: kitcheck schedule-status NAME"); exit(64) }
+    guard arguments.count == 3 else {
+        print("usage: kitcheck schedule-status NAME")
+        exit(64)
+    }
     let service = try ScheduleService(dockerPath: binary.path)
     guard let schedule = service.schedule(forContainerName: arguments[2]) else {
         print("no schedule for \(arguments[2])")
@@ -194,18 +209,22 @@ case "schedule-status":
     print("installed docker path: \(service.installedDockerPath(forContainerName: arguments[2]) ?? "?")")
     print("health: \(service.health(forContainerName: arguments[2]).map(String.init(describing:)) ?? "?")")
     if let result = service.lastResult(for: schedule) {
-        let label = switch result.outcome {
-        case .success: "OK"
-        case .failed: "FAILED"
-        case .timedOut: "TIMED OUT"
-        }
+        let label =
+            switch result.outcome {
+            case .success: "OK"
+            case .failed: "FAILED"
+            case .timedOut: "TIMED OUT"
+            }
         print("last run: \(result.date.formatted()) \(label) — \(result.message)")
     } else {
         print("last run: never")
     }
 
 case "schedule-remove":
-    guard arguments.count == 3 else { print("usage: kitcheck schedule-remove NAME"); exit(64) }
+    guard arguments.count == 3 else {
+        print("usage: kitcheck schedule-remove NAME")
+        exit(64)
+    }
     let service = try ScheduleService(dockerPath: binary.path)
     try service.remove(containerName: arguments[2])
     print("removed schedule for \(arguments[2])")
@@ -220,12 +239,15 @@ case "diagnose":
         daemon = .ready
         containers = DockerPSParser.group(DockerPSParser.parse(output)).all.count
     } catch DockerError.daemonUnavailable {
-        daemon = .daemonDown; containers = 0
+        daemon = .daemonDown
+        containers = 0
     } catch {
-        daemon = .daemonDown; containers = 0
+        daemon = .daemonDown
+        containers = 0
     }
     let pluginWorks = daemon == .ready ? await cli.composePluginWorks() : false
-    let composeAvailable = daemon == .ready
+    let composeAvailable =
+        daemon == .ready
         ? (ComposeCommand.detect(dockerBinary: binary, pluginWorks: { _ in pluginWorks }) != nil)
         : false
     let snapshot = EnvironmentSnapshot(
@@ -254,7 +276,9 @@ case "stats":
         let snap = try await cli.statsSnapshot()
         print("snapshot: \(snap.count) container(s) with live readings")
         for (name, s) in snap.sorted(by: { $0.key < $1.key }) {
-            print("  \(name): cpu \(String(format: "%.1f", s.cpuPercent))%  mem \(ByteFormat.string(s.memUsedBytes))/\(ByteFormat.string(s.memLimitBytes)) (\(String(format: "%.1f", s.memPercent))%)  net ↓\(ByteFormat.string(s.netRxBytes)) ↑\(ByteFormat.string(s.netTxBytes))  pids \(s.pids)")
+            print(
+                "  \(name): cpu \(String(format: "%.1f", s.cpuPercent))%  mem \(ByteFormat.string(s.memUsedBytes))/\(ByteFormat.string(s.memLimitBytes)) (\(String(format: "%.1f", s.memPercent))%)  net ↓\(ByteFormat.string(s.netRxBytes)) ↑\(ByteFormat.string(s.netTxBytes))  pids \(s.pids)"
+            )
         }
     } catch DockerError.daemonUnavailable {
         print("snapshot: daemon down — UI shows 'Unavailable', not zeros")
@@ -264,14 +288,20 @@ case "stats":
         var n = 0
         for try await s in cli.statsStream(containerID: arguments[2]) {
             print("  sample: cpu \(String(format: "%.2f", s.cpuPercent))%  mem \(ByteFormat.string(s.memUsedBytes))")
-            n += 1; if n >= 3 { break }
+            n += 1
+            if n >= 3 { break }
         }
         print("stream stopped after \(n) samples")
         try? await Task.sleep(for: .seconds(1))
-        let check = Process(); check.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        check.arguments = ["-fl", "docker stats"]; let pipe = Pipe(); check.standardOutput = pipe
-        try? check.run(); check.waitUntilExit()
-        let leaked = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        let check = Process()
+        check.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        check.arguments = ["-fl", "docker stats"]
+        let pipe = Pipe()
+        check.standardOutput = pipe
+        try? check.run()
+        check.waitUntilExit()
+        let leaked = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).trimmingCharacters(
+            in: .whitespacesAndNewlines)
         print(leaked.isEmpty ? "teardown: OK — no leaked docker stats process" : "teardown: LEAK:\n\(leaked)")
     }
 

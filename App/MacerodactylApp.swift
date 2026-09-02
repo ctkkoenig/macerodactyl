@@ -1,7 +1,7 @@
 import AppKit
-import SwiftUI
 import MacerodactylKit
 import MacerodactylPanel
+import SwiftUI
 
 @main
 struct MacerodactylApp: App {

@@ -6,7 +6,7 @@ import SwiftUI
 public struct DashboardRootView: View {
     @State private var store: ContainerStore
     @State private var stats: StatsCoordinator
-    @State private var path: [String] = []   // container IDs
+    @State private var path: [String] = []  // container IDs
 
     public init(store: ContainerStore = ContainerStore()) {
         let store = store
@@ -21,7 +21,8 @@ public struct DashboardRootView: View {
                     if let container = store.groups.all.first(where: { $0.id == id }) {
                         ContainerWorkspaceView(store: store, stats: stats, container: container)
                     } else {
-                        ContentUnavailableView("Container gone", systemImage: "shippingbox",
+                        ContentUnavailableView(
+                            "Container gone", systemImage: "shippingbox",
                             description: Text("This container no longer exists."))
                     }
                 }
@@ -33,7 +34,10 @@ public struct DashboardRootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .macerodactylSettingsChanged)) { _ in
             store.resolveBinary()
-            Task { await store.refresh(); store.startPolling(interval: AppSettings.refreshInterval) }
+            Task {
+                await store.refresh()
+                store.startPolling(interval: AppSettings.refreshInterval)
+            }
         }
     }
 
@@ -122,7 +126,8 @@ struct StacksLandingView: View {
             if store.advisories.contains(where: { $0.id == "stacks-missing" }) {
                 AdvisoryListView(advisories: store.advisories)
             } else {
-                ContentUnavailableView("No containers", systemImage: "shippingbox",
+                ContentUnavailableView(
+                    "No containers", systemImage: "shippingbox",
                     description: Text("Compose stacks and docker run containers both appear here once they exist."))
             }
         }
@@ -167,7 +172,9 @@ struct DaemonDownView: View {
         ContentUnavailableView {
             Label("Docker isn’t running", systemImage: "exclamationmark.triangle")
         } description: {
-            Text("Start Docker Desktop (or your Docker provider) and wait for it to finish launching. Macerodactyl never starts the daemon or your containers itself.")
+            Text(
+                "Start Docker Desktop (or your Docker provider) and wait for it to finish launching. Macerodactyl never starts the daemon or your containers itself."
+            )
         } actions: {
             Button("Check again") { Task { await store.refresh() } }
         }
@@ -228,9 +235,17 @@ struct AdvisoryListView: View {
     }
 
     private func icon(_ s: StartupAdvisory.Severity) -> String {
-        switch s { case .blocking: "exclamationmark.octagon.fill"; case .degraded: "exclamationmark.triangle.fill"; case .info: "info.circle.fill" }
+        switch s {
+        case .blocking: "exclamationmark.octagon.fill"
+        case .degraded: "exclamationmark.triangle.fill"
+        case .info: "info.circle.fill"
+        }
     }
     private func color(_ s: StartupAdvisory.Severity) -> Color {
-        switch s { case .blocking: .red; case .degraded: .orange; case .info: .blue }
+        switch s {
+        case .blocking: .red
+        case .degraded: .orange
+        case .info: .blue
+        }
     }
 }

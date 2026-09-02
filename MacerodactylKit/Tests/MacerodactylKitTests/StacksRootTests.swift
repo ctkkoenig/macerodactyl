@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import MacerodactylKit
 
 /// AppSettings reads/writes the shared UserDefaults, so these run on a private
@@ -10,8 +11,7 @@ import Testing
         let saved = UserDefaults.standard.string(forKey: key)
         UserDefaults.standard.removeObject(forKey: key)
         defer {
-            if let saved { UserDefaults.standard.set(saved, forKey: key) }
-            else { UserDefaults.standard.removeObject(forKey: key) }
+            if let saved { UserDefaults.standard.set(saved, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
         }
         try body()
     }
@@ -28,7 +28,7 @@ import Testing
             let dir = FileManager.default.temporaryDirectory.appending(path: "stacks-\(UUID().uuidString)")
             AppSettings.stacksRoot = dir
             #expect(AppSettings.stacksRoot.standardizedFileURL == dir.standardizedFileURL)
-            #expect(!AppSettings.stacksRootExists()) // not created yet
+            #expect(!AppSettings.stacksRootExists())  // not created yet
 
             try AppSettings.createStacksRoot()
             #expect(AppSettings.stacksRootExists())
@@ -44,7 +44,7 @@ import Testing
             ) { _ in fired = true }
             defer { NotificationCenter.default.removeObserver(token) }
             AppSettings.stacksRoot = FileManager.default.temporaryDirectory.appending(path: "x")
-            #expect(fired) // a live view can re-read without a restart
+            #expect(fired)  // a live view can re-read without a restart
         }
     }
 }

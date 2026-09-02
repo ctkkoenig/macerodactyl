@@ -127,10 +127,11 @@ public struct DockerCLI: Sendable {
                     if Self.indicatesDaemonDown(stderr) {
                         continuation.finish(throwing: DockerError.daemonUnavailable)
                     } else {
-                        continuation.finish(throwing: DockerError.nonZeroExit(
-                            code: process.terminationStatus,
-                            stderr: stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-                        ))
+                        continuation.finish(
+                            throwing: DockerError.nonZeroExit(
+                                code: process.terminationStatus,
+                                stderr: stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                            ))
                     }
                 }
             }
@@ -188,9 +189,11 @@ public struct DockerCLI: Sendable {
 
     /// The container's start time, for a truthful uptime (nil if unavailable).
     public func startedAt(containerID: String) async -> Date? {
-        guard let output = try? await run(
-            ["inspect", "--format", "{{.State.StartedAt}}", containerID], timeout: .seconds(10)
-        ) else { return nil }
+        guard
+            let output = try? await run(
+                ["inspect", "--format", "{{.State.StartedAt}}", containerID], timeout: .seconds(10)
+            )
+        else { return nil }
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

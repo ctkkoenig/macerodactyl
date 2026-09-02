@@ -45,7 +45,7 @@ public final class ContainerStore {
     // MARK: Binary / lifecycle
 
     public func resolveBinary() {
-        composeCache = nil // provider may have changed
+        composeCache = nil  // provider may have changed
         if let url = DockerBinaryLocator.resolve(override: AppSettings.dockerPathOverride) {
             cli = DockerCLI(binary: url)
             if availability == .binaryNotFound { setAvailability(.unknown) }
@@ -164,16 +164,18 @@ public final class ContainerStore {
         }
         let compose = await resolveCompose(cli: cli)
         guard let compose else {
-            let message = "Neither `docker compose` nor a `docker-compose` binary is available. Install Docker Compose to control whole stacks."
+            let message =
+                "Neither `docker compose` nor a `docker-compose` binary is available. Install Docker Compose to control whole stacks."
             lastError = message
             throw DockerError.nonZeroExit(code: 1, stderr: message)
         }
-        let subArgs: [String] = switch action {
-        case .start: ["--project-directory", workingDir, "up", "-d"]
-        case .stop: ["--project-directory", workingDir, "stop"]
-        case .restart: ["--project-directory", workingDir, "restart"]
-        case .kill: ["--project-directory", workingDir, "kill"]
-        }
+        let subArgs: [String] =
+            switch action {
+            case .start: ["--project-directory", workingDir, "up", "-d"]
+            case .stop: ["--project-directory", workingDir, "stop"]
+            case .restart: ["--project-directory", workingDir, "restart"]
+            case .kill: ["--project-directory", workingDir, "kill"]
+            }
         let (executable, args) = compose.invocation(subArgs)
         for container in stack.containers { busyContainerIDs.insert(container.id) }
         defer { for container in stack.containers { busyContainerIDs.remove(container.id) } }

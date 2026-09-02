@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import MacerodactylKit
 
 /// Each cold-start environment is faked and asserted to explain itself, rather
@@ -46,7 +47,7 @@ import Testing
         let advisories = StartupDiagnostics.evaluate(env(perl: false))
         let perl = advisories.first { $0.id == "perl-missing" }
         #expect(perl?.severity == .degraded)
-        #expect(perl?.remedy.contains("still work") == true) // schedules still run
+        #expect(perl?.remedy.contains("still work") == true)  // schedules still run
     }
 
     @Test func missingStacksFolderIsInfoWithPath() {

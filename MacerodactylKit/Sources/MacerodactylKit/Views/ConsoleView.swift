@@ -64,21 +64,23 @@ final class ConsoleModel {
                 rconConnected = true
             }
             let response = try await client.send(command: command)
-            entries.append(ConsoleEntry(
-                command: command,
-                output: response.isEmpty ? "(no response)" : response
-            ))
+            entries.append(
+                ConsoleEntry(
+                    command: command,
+                    output: response.isEmpty ? "(no response)" : response
+                ))
         } catch {
             // Drop the session so the next command reconnects fresh.
             await rconClient?.close()
             rconClient = nil
             rconConnected = false
-            let message = switch error {
-            case RCONError.authenticationFailed: "RCON authentication failed — wrong password."
-            case RCONError.timedOut: "RCON timed out. The server may still be starting."
-            case RCONError.connectionFailed(let reason): "RCON connection failed: \(reason)"
-            default: String(describing: error)
-            }
+            let message =
+                switch error {
+                case RCONError.authenticationFailed: "RCON authentication failed — wrong password."
+                case RCONError.timedOut: "RCON timed out. The server may still be starting."
+                case RCONError.connectionFailed(let reason): "RCON connection failed: \(reason)"
+                default: String(describing: error)
+                }
             entries.append(ConsoleEntry(command: command, output: message, isError: true))
         }
     }

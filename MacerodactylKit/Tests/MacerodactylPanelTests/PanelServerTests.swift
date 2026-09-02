@@ -1,8 +1,9 @@
 import Foundation
 import Hummingbird
 import HummingbirdTesting
-import Testing
 import MacerodactylKit
+import Testing
+
 @testable import MacerodactylPanel
 
 /// End-to-end HTTP tests over the real router via HummingbirdTesting — no socket
@@ -50,8 +51,10 @@ import MacerodactylKit
     }
 
     /// Logs in and returns the session cookie value.
-    func login(_ client: some TestClientProtocol, username: String, password: String,
-               csrf: Bool = true, extraHeaders: HTTPFields = [:]) async throws -> (status: HTTPResponse.Status, cookie: String?) {
+    func login(
+        _ client: some TestClientProtocol, username: String, password: String,
+        csrf: Bool = true, extraHeaders: HTTPFields = [:]
+    ) async throws -> (status: HTTPResponse.Status, cookie: String?) {
         var headers: HTTPFields = [.contentType: "application/json"]
         if csrf { headers[PanelHeaders.csrf] = "1" }
         for field in extraHeaders { headers[field.name] = field.value }
@@ -179,7 +182,7 @@ import MacerodactylKit
         let harness = try await makeHarness()
         try await harness.app.test(.router) { client in
             let (status, _) = try await login(client, username: "admin", password: harness.adminPassword, csrf: false)
-            #expect(status == .forbidden) // login is a POST; no CSRF header → blocked before auth
+            #expect(status == .forbidden)  // login is a POST; no CSRF header → blocked before auth
         }
     }
 
@@ -191,7 +194,10 @@ import MacerodactylKit
             var sawTooMany = false
             for _ in 0..<12 {
                 let (status, _) = try await login(client, username: "admin", password: "wrong-password")
-                if status == .tooManyRequests { sawTooMany = true; break }
+                if status == .tooManyRequests {
+                    sawTooMany = true
+                    break
+                }
                 #expect(status == .unauthorized)
             }
             #expect(sawTooMany)
@@ -212,7 +218,7 @@ import MacerodactylKit
             headers[.init("X-Forwarded-For")!] = "10.0.0.1"
             headers[.init("Remote-User")!] = "admin"
             try await client.execute(uri: "/api/me", method: .get, headers: headers) { response in
-                #expect(response.status == .unauthorized) // headers grant nothing
+                #expect(response.status == .unauthorized)  // headers grant nothing
             }
         }
     }
@@ -230,8 +236,8 @@ import MacerodactylKit
     }
 }
 
-private extension HTTPFields {
-    func merging(csrf: Bool) -> HTTPFields {
+extension HTTPFields {
+    fileprivate func merging(csrf: Bool) -> HTTPFields {
         var copy = self
         if csrf { copy[PanelHeaders.csrf] = "1" }
         return copy
