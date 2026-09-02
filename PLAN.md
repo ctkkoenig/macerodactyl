@@ -42,23 +42,31 @@ recorded in [CLAUDE.md](CLAUDE.md); this file tracks the build order.
 - Verify with a throwaway fixture stack + a bare `docker run` container;
   `swift test`. **Stop for verification.**
 
-## Phase 2 — Native parity: logs, consoles, files
+## Phase 2 — Logs and console (narrowed: no file editing)
 
 - UI-agnostic services in the Kit (the web reuses them untouched):
-  `LogStreamService` (`docker logs --follow --tail 500 --timestamps`),
-  `ExecConsoleService` (stateless per-line `/bin/sh -c`), `RCONService`
-  (native RCON protocol: auth type 3, command type 2), `FileService`
-  (list/read/write, confinement enforced inside the service).
-- Native UI: log tab (follow/pause, filter, copy, capped scrollback); console
-  tab (auto-switches to RCON for Minecraft); file browser rooted at the stack's
-  working_dir with a monospace editor — dirty indicator, external-change
-  detection, Open in Finder, and Apply (`docker compose up -d`) after compose
-  edits.
+  `LogStreamService` (`docker logs --follow --tail 500 --timestamps`, exposed
+  as an async line stream that maps 1:1 onto SSE when the authenticated server
+  exists), `ExecConsoleService` (stateless per-line exec), `RCONService`
+  (native RCON protocol: auth type 3, command type 2). Never `docker exec` for
+  the Minecraft console. Host-side arguments are always arrays — no shell
+  interpolation; a console session is bound to a single container.
+- Log streams must tear their child process down when the window closes or the
+  selected container changes (a leaked `docker logs -f` is the likely bug),
+  and stay usable for silent containers and very fast producers (batched
+  appends, capped scrollback).
+- Native UI: log tab (follow toggle, filter, copy) and console tab
+  (auto-switches to RCON for Minecraft).
 - Fixture adds `itzg/minecraft-server` with RCON; verify auth + `list`.
   **Stop for verification.**
 
-## Phase 3 — Web panel core
+## Phase 3 — File editing + web panel core
 
+- File editing (moved from Phase 2): `FileService` (list/read/write,
+  confinement enforced inside the service); native file browser rooted at the
+  stack's working_dir with a monospace editor — dirty indicator,
+  external-change detection, Open in Finder, and Apply
+  (`docker compose up -d`) after compose edits.
 - Hummingbird server whose lifecycle follows the settings toggle; routes call
   the same `ContainerStore`/services, gated per-request by `Authorization`.
 - Auth flow: first-run admin creation, bcrypt, sessions, login rate limiting.

@@ -9,11 +9,13 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000003 /* MacerodactylApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000001 /* MacerodactylApp.swift */; };
 		A10000000000000000000004 /* MacerodactylKit in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000000E /* MacerodactylKit */; };
+		A10000000000000000000016 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000015 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		A10000000000000000000001 /* MacerodactylApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacerodactylApp.swift; sourceTree = "<group>"; };
 		A10000000000000000000002 /* Macerodactyl.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Macerodactyl.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000015 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -40,6 +42,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000001 /* MacerodactylApp.swift */,
+				A10000000000000000000015 /* Assets.xcassets */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -116,6 +119,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000016 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -175,6 +179,7 @@
 		A10000000000000000000013 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -197,6 +202,7 @@
 		A10000000000000000000014 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;

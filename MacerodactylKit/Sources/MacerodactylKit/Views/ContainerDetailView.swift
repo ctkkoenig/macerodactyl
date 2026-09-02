@@ -1,25 +1,58 @@
 import SwiftUI
 
 struct ContainerDetailView: View {
+    enum Tab: String, CaseIterable {
+        case overview = "Overview"
+        case logs = "Logs"
+        case console = "Console"
+    }
+
     let store: ContainerStore
     let container: DockerContainer
+
+    @State private var tab: Tab = .overview
 
     private var isBusy: Bool { store.busyContainerIDs.contains(container.id) }
 
     var body: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $tab) {
+                ForEach(Tab.allCases, id: \.self) { tab in
+                    Text(tab.rawValue).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 60)
+            .padding(.vertical, 8)
+            Divider()
+            switch tab {
+            case .overview:
+                overviewTab
+            case .logs:
+                LogsView(store: store, container: container)
+                    .id(container.id)
+            case .console:
+                ConsoleView(store: store, container: container)
+                    .id(container.id)
+            }
+        }
+        .navigationTitle(container.name)
+    }
+
+    private var overviewTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
                 actions
                 overview
-                Text("Logs, console, and file editing arrive in the next phase.")
+                Text("File editing arrives in the next phase.")
                     .font(.callout)
                     .foregroundStyle(.tertiary)
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle(container.name)
     }
 
     private var header: some View {

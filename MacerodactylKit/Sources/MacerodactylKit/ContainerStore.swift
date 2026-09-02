@@ -177,7 +177,7 @@ public final class ContainerStore {
         lastError = nil
     }
 
-    static func describe(_ error: Error) -> String {
+    nonisolated static func describe(_ error: Error) -> String {
         switch error {
         case DockerError.daemonUnavailable: "Docker isn't running."
         case DockerError.timeout: "The docker command timed out."

@@ -93,7 +93,25 @@ struct SidebarView: View {
                 )
             }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let logo = Brand.longLogo {
+                Image(nsImage: logo)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxHeight: 34)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .padding(10)
+                    .frame(maxWidth: .infinity)
+            }
+        }
     }
+}
+
+/// Branding assets bundled with the Kit (also served by the web panel later).
+public enum Brand {
+    public static let longLogo: NSImage? = Bundle.module
+        .url(forResource: "logo-long", withExtension: "png")
+        .flatMap { NSImage(contentsOf: $0) }
 }
 
 struct StackHeaderView: View {

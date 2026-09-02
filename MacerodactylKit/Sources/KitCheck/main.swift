@@ -1,21 +1,53 @@
 import Foundation
 import MacerodactylKit
 
-// Headless smoke check: resolves the docker binary, lists containers through
-// the exact same code path the app uses, and prints the grouped result.
-// Usage: swift run kitcheck
+// Headless smoke checks that exercise the app's real code paths.
+// Usage:
+//   kitcheck                          list containers, grouped
+//   kitcheck start|stop|restart NAME  power action
+//   kitcheck logs NAME SECONDS        stream logs briefly, then cancel (teardown check)
+//   kitcheck exec NAME CMDLINE        one line-based console command
+//   kitcheck rcon NAME CMDLINE        detect + connect + run one RCON command
 
 guard let binary = DockerBinaryLocator.resolve(override: AppSettings.dockerPathOverride) else {
     print("docker binary: NOT FOUND (checked ~/.orbstack/bin, /opt/homebrew/bin, /usr/local/bin)")
     exit(2)
 }
-print("docker binary: \(binary.path)")
 
 let cli = DockerCLI(binary: binary)
-
-// Optional action mode: kitcheck <start|stop|restart> <container-name>
 let arguments = CommandLine.arguments
-if arguments.count == 3, ["start", "stop", "restart"].contains(arguments[1]) {
+
+func listContainers() async {
+    do {
+        let output = try await cli.run(["ps", "-a", "--no-trunc", "--format", "{{json .}}"], timeout: .seconds(15))
+        let groups = DockerPSParser.group(DockerPSParser.parse(output))
+        print("daemon: ready — \(groups.stacks.count) stack(s), \(groups.unmanaged.count) unmanaged")
+        for stack in groups.stacks {
+            print("\nstack \(stack.name) (\(stack.runningCount)/\(stack.containers.count) running) dir=\(stack.workingDir ?? "-")")
+            for container in stack.containers {
+                let health = container.health.map { " [\($0.rawValue)]" } ?? ""
+                print("  \(container.isRunning ? "●" : "○") \(container.name)\(health)  \(container.image)  \(container.status)")
+            }
+        }
+        if !groups.unmanaged.isEmpty {
+            print("\nunmanaged")
+            for container in groups.unmanaged {
+                let health = container.health.map { " [\($0.rawValue)]" } ?? ""
+                print("  \(container.isRunning ? "●" : "○") \(container.name)\(health)  \(container.image)  \(container.status)")
+            }
+        }
+    } catch DockerError.daemonUnavailable {
+        print("daemon: NOT RUNNING (this is the app's daemon-down state)")
+        exit(3)
+    } catch {
+        print("error: \(error)")
+        exit(1)
+    }
+}
+
+switch arguments.dropFirst().first {
+case "start", "stop", "restart":
+    guard arguments.count == 3 else { print("usage: kitcheck \(arguments[1]) NAME"); exit(64) }
     do {
         try await cli.run([arguments[1], arguments[2]], timeout: .seconds(120))
         print("\(arguments[1]) \(arguments[2]): ok")
@@ -23,27 +55,81 @@ if arguments.count == 3, ["start", "stop", "restart"].contains(arguments[1]) {
         print("\(arguments[1]) \(arguments[2]): FAILED — \(error)")
         exit(1)
     }
-}
+    await listContainers()
 
-do {
-    let output = try await cli.run(["ps", "-a", "--no-trunc", "--format", "{{json .}}"], timeout: .seconds(15))
-    let groups = DockerPSParser.group(DockerPSParser.parse(output))
-    print("daemon: ready — \(groups.stacks.count) stack(s), \(groups.unmanaged.count) unmanaged")
-    for stack in groups.stacks {
-        print("\nstack \(stack.name) (\(stack.runningCount)/\(stack.containers.count) running) dir=\(stack.workingDir ?? "-")")
-        for container in stack.containers {
-            let health = container.health.map { " [\($0.rawValue)]" } ?? ""
-            print("  \(container.isRunning ? "●" : "○") \(container.name)\(health)  \(container.image)  \(container.status)")
+case "logs":
+    guard arguments.count == 4, let seconds = Int(arguments[3]) else {
+        print("usage: kitcheck logs NAME SECONDS")
+        exit(64)
+    }
+    let name = arguments[2]
+    let task = Task {
+        var count = 0
+        do {
+            for try await line in LogStreamService.lines(for: name, cli: cli) {
+                count += 1
+                if count <= 5 { print("log> \(line)") }
+            }
+        } catch {
+            print("stream error: \(error)")
+        }
+        return count
+    }
+    try? await Task.sleep(for: .seconds(seconds))
+    task.cancel()
+    let count = await task.value
+    print("received \(count) line(s) in \(seconds)s; stream cancelled")
+    // Give the termination handler a beat, then look for leaked children.
+    try? await Task.sleep(for: .seconds(1))
+    let check = Process()
+    check.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+    check.arguments = ["-fl", "docker logs"]
+    let pipe = Pipe()
+    check.standardOutput = pipe
+    try? check.run()
+    check.waitUntilExit()
+    let leaked = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    if leaked.isEmpty {
+        print("teardown: OK — no leaked docker logs process")
+    } else {
+        print("teardown: LEAK DETECTED:\n\(leaked)")
+        exit(1)
+    }
+
+case "exec":
+    guard arguments.count == 4 else { print("usage: kitcheck exec NAME CMDLINE"); exit(64) }
+    let entry = await ExecConsole(containerID: arguments[2], cli: cli).run(arguments[3])
+    print("$ \(entry.command)\n\(entry.output)\(entry.isError ? "  [error]" : "")")
+
+case "rcon":
+    guard arguments.count == 4 else { print("usage: kitcheck rcon NAME CMDLINE"); exit(64) }
+    switch await MinecraftRCON.detect(containerID: arguments[2], cli: cli) {
+    case .notMinecraft:
+        print("not a Minecraft container")
+        exit(1)
+    case .unreachable(let reason):
+        print("RCON unreachable: \(reason)")
+        exit(1)
+    case .available(let endpoint):
+        print("RCON endpoint: \(endpoint.host):\(endpoint.port)")
+        let client = RCONClient(endpoint: endpoint)
+        do {
+            try await client.connect()
+            print("auth: ok")
+            let response = try await client.send(command: arguments[3])
+            print("> \(arguments[3])\n\(response)")
+            await client.close()
+        } catch {
+            print("rcon error: \(error)")
+            exit(1)
         }
     }
-    if !groups.unmanaged.isEmpty {
-        print("\nunmanaged")
-        for container in groups.unmanaged {
-            let health = container.health.map { " [\($0.rawValue)]" } ?? ""
-            print("  \(container.isRunning ? "●" : "○") \(container.name)\(health)  \(container.image)  \(container.status)")
-        }
-    }
-} catch DockerError.daemonUnavailable {
-    print("daemon: NOT RUNNING (this is the app's daemon-down state)")
-    exit(3)
+
+case nil:
+    await listContainers()
+
+default:
+    print("unknown subcommand \(arguments[1])")
+    exit(64)
 }
