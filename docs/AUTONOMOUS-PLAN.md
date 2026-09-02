@@ -26,7 +26,7 @@ Explore → Plan (record fork+choice) → Build → Verify (tests + REAL process
 - Swift 6.3.3 (toolchain updated from 6.2). Xcode at `/Applications/Xcode.app`. `xcode-select -p` → Xcode.
 - `swiftlint`/`swift-format` not installed as separate binaries; `swift format` subcommand ships with the toolchain (verify). Prefer toolchain `swift format`.
 - Docker Desktop is the target (`/usr/local/bin/docker`). Daemon currently up.
-- Repo: github.com/CtkFT/macerodactyl (PRIVATE). gh authed as CtkFT.
+- Repo: github.com/ctkkoenig/macerodactyl (PRIVATE). gh authed as the owner.
 - Panel DB: `~/Library/Application Support/Macerodactyl/panel.sqlite` (schema v2). Port 27180. LAN IP 192.168.4.166.
 - Native app built via: `xcodebuild -project Macerodactyl.xcodeproj -scheme Macerodactyl -configuration Debug -derivedDataPath <scratch>/dd build CODE_SIGN_IDENTITY=-`.
 - Kit tests: `cd MacerodactylKit && swift test`. Headless smoke: `swift run kitcheck ...` / `PanelTool ...`.

@@ -6,7 +6,7 @@ information architecture, built for people who run a few real containers (a game
 server, a bot, a side project) on a Mac or a small Linux box and want to manage
 them without living in the terminal.
 
-[![CI](https://github.com/CtkFT/macerodactyl/actions/workflows/ci.yml/badge.svg)](https://github.com/CtkFT/macerodactyl/actions/workflows/ci.yml)
+[![CI](https://github.com/ctkkoenig/macerodactyl/actions/workflows/ci.yml/badge.svg)](https://github.com/ctkkoenig/macerodactyl/actions/workflows/ci.yml)
 &nbsp;macOS 15+ · Swift 6 · Hummingbird 2 · MIT
 
 <p align="center">

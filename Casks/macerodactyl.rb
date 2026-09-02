@@ -14,10 +14,10 @@ cask "macerodactyl" do
   version "0.1.0"
   sha256 :no_check # replace with the real artifact sha256 when you publish
 
-  url "https://github.com/CtkFT/macerodactyl/releases/download/v#{version}/Macerodactyl-#{version}.zip"
+  url "https://github.com/ctkkoenig/macerodactyl/releases/download/v#{version}/Macerodactyl-#{version}.zip"
   name "Macerodactyl"
   desc "Native macOS control panel for local Docker containers"
-  homepage "https://github.com/CtkFT/macerodactyl"
+  homepage "https://github.com/ctkkoenig/macerodactyl"
 
   depends_on macos: ">= :sequoia" # macOS 15+
 
