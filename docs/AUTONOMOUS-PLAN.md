@@ -52,7 +52,7 @@ Explore → Plan (record fork+choice) → Build → Verify (tests + REAL process
 - [x] T2.4 Retained metrics (ring-buffer stats → SQLite) + persistent searchable logs + download. Retention policy w/ safe default (won't fill disk). AC: retention enforced + tested; disk cost bounded; search works.
 
 ### Tier 3 — end the XSS liability
-- [ ] T3.1 Extract web frontend from the Swift string. Decide: build-step SPA vs server-rendered+htmx (no npm in build for source-only). AC: a missed escape is no longer a latent XSS (auto-escaping templating or framework); tests; a11y pass.
+- [x] T3.1 Extract web frontend from the Swift string. Decide: build-step SPA vs server-rendered+htmx (no npm in build for source-only). AC: a missed escape is no longer a latent XSS (auto-escaping templating or framework); tests; a11y pass.
 
 ### Tier 4 — widen the audience
 - [ ] T4.1 Ship the server on Linux (headless). Verify it ACTUALLY builds+runs for Linux (SwiftPM Linux build; the app target excluded). AC: `swift build` for the server product on Linux (via docker swift image) succeeds; server runs and serves; a Docker image of the panel.
