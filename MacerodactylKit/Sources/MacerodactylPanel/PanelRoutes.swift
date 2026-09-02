@@ -187,7 +187,10 @@ struct PanelRoutes {
             guard let code = body.totp, !code.isEmpty else {
                 return json(["totpRequired": true], status: .ok)
             }
-            guard TOTP.verify(code, secret: secret) else {
+            let lastStep = (try? store.totpLastStep(userID: user.id)) ?? 0
+            // Anti-replay: the code must match AND come from a step strictly newer
+            // than the last one consumed, so a captured code can't be reused.
+            guard let step = TOTP.matchedStep(code, secret: secret), step > lastStep else {
                 await rateLimiter.recordFailure(username: body.username, ip: ip)
                 audit(user: user.username, action: "login.totp_failure", outcome: "denied", ip: ip)
                 struct TOTPError: Encodable {
@@ -196,6 +199,7 @@ struct PanelRoutes {
                 }
                 return encode(TOTPError(error: "Invalid authentication code", totpRequired: true), status: .unauthorized)
             }
+            try? store.setTOTPLastStep(userID: user.id, step: step)
         }
 
         await rateLimiter.recordSuccess(username: body.username, ip: ip)

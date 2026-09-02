@@ -12,6 +12,10 @@
     <input id="u" autocapitalize="none" autocomplete="username" autofocus>
     <label for="p">Password</label>
     <input id="p" type="password" autocomplete="current-password">
+    <div id="totpRow" hidden>
+      <label for="t">Authentication code</label>
+      <input id="t" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code">
+    </div>
     <button id="go">Sign in</button>
     <div class="err" id="err"></div>
   </div>

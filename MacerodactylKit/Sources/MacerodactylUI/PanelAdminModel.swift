@@ -123,6 +123,20 @@ public final class PanelAdminModel {
         reload()
     }
 
+    /// Whether a user has confirmed TOTP 2FA — surfaced so an admin can offer a
+    /// reset (the only in-product recovery if someone loses their authenticator).
+    public func twoFactorEnabled(_ user: PanelUser) -> Bool {
+        ((try? store.totpState(userID: user.id)) ?? (secret: nil, enabled: false)).enabled
+    }
+
+    /// Clears a user's 2FA (lockout recovery). The machine's owner runs the app,
+    /// so this is the trusted escape hatch when an authenticator is lost.
+    public func resetTwoFactor(_ user: PanelUser) {
+        try? store.setTOTPEnabled(userID: user.id, enabled: false)
+        try? store.setTOTPSecret(userID: user.id, secret: nil)
+        reload()
+    }
+
     // MARK: Grants
 
     public func grant(for user: PanelUser, container: String) -> ContainerGrant {

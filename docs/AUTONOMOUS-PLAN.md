@@ -10,7 +10,7 @@ would star. Execute the roadmap in `macerodactyl-assessment` (strengths/gaps/
 roadmap). Autonomous: decide, record, continue. Never stop except out of work.
 
 ## Hard constraints (override everything)
-- **Fixtures I own**: `testweb` stack (`~/stacks/testweb`), `fixture-bare`, `fixture-mc`. NEVER touch `workload-a` or `workload-b` (real workloads) — no stop/kill/restart/modify/delete of them or their files.
+- **Fixtures I own**: `testweb` stack (`~/stacks/testweb`), `fixture-bare`, `fixture-mc`. NEVER touch the two real (non-fixture) workloads — no stop/kill/restart/modify/delete of them or their files.
 - Only modify files under `~/Documents/GitHub/macerodactyl` and fixture folders under `~/stacks`. Never read/touch Desktop, other Documents, `.ssh`, `.aws`, `.env`, credentials.
 - Repo stays **private**. Never push to a public remote. Never publish a release. Prepare, stop short.
 - **Do not change app icon/logo artwork** (`App/Assets.xcassets/AppIcon.appiconset`, `Resources/wordmark-*.png`, `assets/`). Owner's open question.

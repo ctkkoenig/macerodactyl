@@ -88,6 +88,35 @@ import Testing
         }
     }
 
+    @Test func totpCodeCannotBeReplayed() async throws {
+        let harness = try await base.makeHarness()
+        try await harness.app.test(.router) { client in
+            let (_, cookie) = try await base.login(client, username: "scoped", password: harness.scopedPassword)
+            let token = try #require(cookie)
+            var secret = ""
+            try await client.execute(uri: "/api/2fa/begin", method: .post, headers: headers(token)) { r in
+                secret = try jsonBody(r.body)["secret"] as! String
+            }
+            try await client.execute(
+                uri: "/api/2fa/confirm", method: .post, headers: headers(token),
+                body: ByteBuffer(string: #"{"code":"\#(TOTP.code(secret: secret)!)"}"#)
+            ) { #expect($0.status == .ok) }
+
+            let code = TOTP.code(secret: secret)!
+            let loginBody = #"{"username":"scoped","password":"\#(harness.scopedPassword)","totp":"\#(code)"}"#
+            // First use of this code logs in.
+            try await client.execute(
+                uri: "/login", method: .post, headers: [.contentType: "application/json", PanelHeaders.csrf: "1"],
+                body: ByteBuffer(string: loginBody)
+            ) { #expect($0.status == .ok) }
+            // Replaying the SAME code (same 30s step) is rejected as a used code.
+            try await client.execute(
+                uri: "/login", method: .post, headers: [.contentType: "application/json", PanelHeaders.csrf: "1"],
+                body: ByteBuffer(string: loginBody)
+            ) { #expect($0.status == .unauthorized) }
+        }
+    }
+
     @Test func sessionsListAndRevoke() async throws {
         let harness = try await base.makeHarness()
         try await harness.app.test(.router) { client in

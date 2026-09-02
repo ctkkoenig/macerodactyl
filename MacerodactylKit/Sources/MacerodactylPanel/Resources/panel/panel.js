@@ -20,7 +20,7 @@ function h(tag, props, ...kids) {
       if (v == null || v === false) continue;
       if (k === 'class') el.className = v;
       else if (k === 'text') el.textContent = v;
-      else if (k.slice(0, 2) === 'on' && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
+      else if (k.slice(0, 2) === 'on') { if (typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v); }  // never as an inline-handler attribute
       else if (k === 'value') el.value = v;
       else if (k === 'disabled' || k === 'checked' || k === 'hidden') el[k] = !!v;
       else el.setAttribute(k, v === true ? '' : v);

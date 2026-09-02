@@ -41,15 +41,22 @@ public enum TOTP {
     /// step of clock drift (the standard tolerance). Comparison is length-then-
     /// constant-time to avoid leaking via timing.
     public static func verify(_ input: String, secret: String, at date: Date = Date(), window: Int = 1) -> Bool {
+        matchedStep(input, secret: secret, at: date, window: window) != nil
+    }
+
+    /// Like `verify`, but returns the time-step the code matched (or nil). The
+    /// caller can persist it and reject any future code at that step or earlier,
+    /// closing the ~30-90s replay window a captured code would otherwise have.
+    public static func matchedStep(_ input: String, secret: String, at date: Date = Date(), window: Int = 1) -> Int64? {
         let trimmed = input.trimmingCharacters(in: .whitespaces)
-        guard trimmed.count == digits, let key = base32Decode(secret) else { return false }
+        guard trimmed.count == digits, let key = base32Decode(secret) else { return nil }
         let base = Int64(max(0, date.timeIntervalSince1970) / Double(period))
         for offset in -window...window {
             let counter = base + Int64(offset)
             guard counter >= 0 else { continue }
-            if constantTimeEquals(code(key: key, counter: UInt64(counter)), trimmed) { return true }
+            if constantTimeEquals(code(key: key, counter: UInt64(counter)), trimmed) { return counter }
         }
-        return false
+        return nil
     }
 
     // MARK: internals

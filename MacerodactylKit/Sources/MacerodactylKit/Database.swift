@@ -205,7 +205,7 @@ public enum PanelBackup {
 /// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
 /// scoping, and audit never have to be retrofitted into the data model.
 public enum PanelSchema {
-    public static let currentVersion = 6
+    public static let currentVersion = 7
 
     public static func migrate(_ db: Database) throws {
         if db.userVersion < 1 {
@@ -304,6 +304,12 @@ public enum PanelSchema {
                 ALTER TABLE sessions ADD COLUMN last_seen TEXT;
                 """)
             db.userVersion = 6
+        }
+        if db.userVersion < 7 {
+            // The last TOTP time-step a successful login consumed, so a captured
+            // code can't be replayed within its ~30-90s validity window.
+            try db.execute("ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0")
+            db.userVersion = 7
         }
     }
 }
@@ -509,6 +515,15 @@ public final class PanelDataStore: Sendable {
 
     public func setTOTPEnabled(userID: Int64, enabled: Bool) throws {
         try db.run("UPDATE users SET totp_enabled = ? WHERE id = ?", [.integer(enabled ? 1 : 0), .integer(userID)])
+    }
+
+    /// The last consumed TOTP step (anti-replay); 0 if never used.
+    public func totpLastStep(userID: Int64) throws -> Int64 {
+        try db.query("SELECT totp_last_step FROM users WHERE id = ?", [.integer(userID)]).first?["totp_last_step"]?.asInt ?? 0
+    }
+
+    public func setTOTPLastStep(userID: Int64, step: Int64) throws {
+        try db.run("UPDATE users SET totp_last_step = ? WHERE id = ?", [.integer(step), .integer(userID)])
     }
 
     public func sessionUser(tokenHash: String, now: String) throws -> PanelUser? {

@@ -100,6 +100,11 @@ public struct PanelSettingsView: View {
                         Button("Grants…") { model.editingUser = user }
                             .controlSize(.small)
                     }
+                    if model.twoFactorEnabled(user) {
+                        Button("Reset 2FA") { model.resetTwoFactor(user) }
+                            .controlSize(.small)
+                            .help("Turn off two-factor for this account (recovery if they lost their authenticator).")
+                    }
                     Button(role: .destructive) {
                         model.deleteUser(user)
                     } label: {

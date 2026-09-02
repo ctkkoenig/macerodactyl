@@ -42,6 +42,13 @@ These properties are load-bearing. A way to break any of them is a vulnerability
   truncated); sessions are `HttpOnly` + `SameSite=Lax` cookies with a custom
   CSRF header on every mutating request; failed logins are rate-limited and the
   limit persists across restarts.
+- Optional TOTP 2FA gates login (a wrong code counts toward the same rate limit
+  as a bad password, and a used code can't be replayed within its window). The
+  TOTP secret is stored in the panel database in plaintext — the same database
+  already holds session tokens and bcrypt hashes, so protect the database file
+  (it lives in the app's Application Support directory, `0700` on macOS). Losing
+  an authenticator is recoverable: the machine's owner can reset a user's 2FA
+  from the native app.
 
 ## Operational guidance (not a vulnerability, but important)
 
