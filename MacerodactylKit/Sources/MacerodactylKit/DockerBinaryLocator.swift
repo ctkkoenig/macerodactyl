@@ -4,13 +4,17 @@ import Foundation
 /// shell PATH, so a bare `docker` lookup succeeds in Terminal and fails when
 /// the app is launched from Finder — never rely on PATH.
 public enum DockerBinaryLocator {
-    /// Candidate locations, in priority order after the user override.
+    /// Candidate locations, in priority order after the user override. The macOS
+    /// paths come first (Docker Desktop is the primary target); `/usr/bin/docker`
+    /// is included so the headless server also resolves docker in a Linux
+    /// container (Tier 4), where the CLI lives on PATH at that path.
     public static var defaultCandidates: [URL] {
         let home = FileManager.default.homeDirectoryForCurrentUser
         return [
             home.appending(path: ".orbstack/bin/docker"),
             URL(fileURLWithPath: "/opt/homebrew/bin/docker"),
             URL(fileURLWithPath: "/usr/local/bin/docker"),
+            URL(fileURLWithPath: "/usr/bin/docker"),
         ]
     }
 

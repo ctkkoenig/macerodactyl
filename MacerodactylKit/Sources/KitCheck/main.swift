@@ -122,6 +122,7 @@ case "rcon":
         exit(1)
     case .available(let endpoint):
         print("RCON endpoint: \(endpoint.host):\(endpoint.port)")
+        #if canImport(Network)
         let client = RCONClient(endpoint: endpoint)
         do {
             try await client.connect()
@@ -133,6 +134,10 @@ case "rcon":
             print("rcon error: \(error)")
             exit(1)
         }
+        #else
+        print("RCON client unavailable on this platform (needs Network.framework)")
+        exit(1)
+        #endif
     }
 
 case "files":

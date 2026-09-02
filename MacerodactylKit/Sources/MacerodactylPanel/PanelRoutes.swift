@@ -957,7 +957,7 @@ struct PanelRoutes {
         let data = (try? JSONSerialization.data(withJSONObject: object.mapValues { anyify($0) })) ?? Data("{}".utf8)
         return Response(
             status: status, headers: [.contentType: "application/json"],
-            body: .init(byteBuffer: ByteBuffer(data: data)))
+            body: .init(byteBuffer: ByteBuffer(bytes: data)))
     }
 
     private func anyify(_ value: some Encodable) -> Any {
@@ -970,6 +970,6 @@ struct PanelRoutes {
         let data = (try? JSONEncoder().encode(value)) ?? Data("{}".utf8)
         return Response(
             status: status, headers: [.contentType: "application/json"],
-            body: .init(byteBuffer: ByteBuffer(data: data)))
+            body: .init(byteBuffer: ByteBuffer(bytes: data)))
     }
 }

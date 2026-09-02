@@ -1,6 +1,11 @@
-import CryptoKit
 import Foundation
 import HummingbirdBcrypt
+
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 
 /// Bcrypt password hashing at cost factor 12. Two things worth stating:
 ///

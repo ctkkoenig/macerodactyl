@@ -104,6 +104,7 @@ public struct LiveContainerService: ContainerService {
         else { return nil }
         switch await MinecraftRCON.detect(containerID: container.id, cli: cli) {
         case .available(let endpoint):
+            #if canImport(Network)
             let client = RCONClient(endpoint: endpoint)
             do {
                 try await client.connect()
@@ -113,6 +114,11 @@ public struct LiveContainerService: ContainerService {
             } catch {
                 return ConsoleEntry(command: command, output: "RCON error: \(error)", isError: true)
             }
+            #else
+            // Linux: the RCON client needs Network.framework; use shell exec.
+            _ = endpoint
+            return await ExecConsole(containerID: container.id, cli: cli).run(command)
+            #endif
         case .unreachable(let reason):
             return ConsoleEntry(command: command, output: "RCON unavailable: \(reason)", isError: true)
         case .notMinecraft:

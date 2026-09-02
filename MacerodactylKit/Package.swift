@@ -17,10 +17,18 @@ let package = Package(
         // Already vendored transitively; declared directly so the panel can
         // serve HTTPS (self-signed) when bound to the LAN without a tunnel.
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.0.0"),
+        // Cross-platform SHA-256 (CryptoKit is Apple-only). Also already vendored
+        // transitively; used via `import Crypto` on Linux, `CryptoKit` on macOS.
+        .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
     ],
     targets: [
+        // Maps <sqlite3.h> to a Swift-importable module on platforms whose SDK
+        // has no `SQLite3` module (Linux). On macOS the SDK module is used
+        // instead (see the conditional import in Database.swift).
+        .systemLibrary(name: "CSQLite"),
         .target(
             name: "MacerodactylKit",
+            dependencies: ["CSQLite"],
             resources: [
                 .copy("Resources/wordmark-light.png"),
                 .copy("Resources/wordmark-dark.png"),
@@ -36,6 +44,7 @@ let package = Package(
                 .product(name: "HummingbirdBcrypt", package: "hummingbird-auth"),
                 .product(name: "HummingbirdTLS", package: "hummingbird"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
+                .product(name: "Crypto", package: "swift-crypto"),
             ],
             // The web frontend: static HTML/CSS/JS served from the bundle (built
             // with safe DOM APIs, so a missed escape can't be a latent XSS).

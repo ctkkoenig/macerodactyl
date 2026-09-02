@@ -1,5 +1,11 @@
 import Foundation
+
+// The RCON client is built on Network.framework (Apple-only). Detection and the
+// protocol codec below are cross-platform; only the live TCP client is gated, so
+// on Linux the Minecraft console falls back to `docker exec` (see callers).
+#if canImport(Network)
 import Network
+#endif
 
 /// Source RCON protocol (what Minecraft speaks): little-endian frames of
 /// [int32 length][int32 requestID][int32 type][body bytes][0x00 0x00],
@@ -90,6 +96,7 @@ public struct RCONEndpoint: Sendable, Equatable {
     }
 }
 
+#if canImport(Network)
 /// Minimal RCON client over Network.framework. One client is bound to one
 /// endpoint; operations are serialized by the actor.
 public actor RCONClient {
@@ -263,6 +270,8 @@ public actor RCONClient {
         }
     }
 }
+
+#endif  // canImport(Network) — end of the RCONClient actor
 
 /// Detects whether a container is a Minecraft server reachable over RCON.
 /// Detection reads `docker inspect` at runtime — the password comes from the

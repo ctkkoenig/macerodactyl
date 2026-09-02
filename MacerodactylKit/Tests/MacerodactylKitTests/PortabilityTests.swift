@@ -62,6 +62,7 @@ import Testing
         #expect(paths.contains("/opt/homebrew/bin/docker"))  // Apple Silicon Homebrew
         #expect(paths.contains("/usr/local/bin/docker"))  // Intel Homebrew / Docker Desktop
         #expect(paths.contains { $0.hasSuffix(".orbstack/bin/docker") })
+        #expect(paths.contains("/usr/bin/docker"))  // Linux container (Tier 4 headless server)
     }
 }
 

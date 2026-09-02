@@ -1,5 +1,13 @@
 import Foundation
+
+// The SQLite C API. macOS ships an `SQLite3` module in its SDK; Linux has no
+// such module, so a small system-library target (`CSQLite`) maps <sqlite3.h>
+// there. Same symbols either way.
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 

@@ -1,6 +1,11 @@
-import CryptoKit
 import Foundation
 import MacerodactylKit
+
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 
 /// Server-side session tokens. The raw token lives only in the client's cookie;
 /// the database stores only its SHA-256 hash, so a leaked database can't be

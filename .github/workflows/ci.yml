@@ -44,10 +44,34 @@ jobs:
             grep -E 'error:|BUILD (SUCCEEDED|FAILED)' || true
           test -d .ci-dd/Build/Products/Debug/Macerodactyl.app
 
-  # NOTE: real-Docker end-to-end integration is NOT possible on GitHub-hosted
-  # macOS runners — they are themselves VMs and forbid nested virtualization, so
-  # colima/Docker Desktop cannot start a VM (empirically confirmed: "error
-  # starting vm"). Ubuntu runners have Docker natively, but the panel core does
-  # not yet build on Linux. The integration job is added on a Linux runner in
-  # Tier 4, once `macerodactyld` + the Kit core build headless on Linux; it will
-  # run the daemon against real dockerd and curl the panel end-to-end.
+  linux-server:
+    name: Linux server build + serve (headless)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Build the headless server the same way the Dockerfile does — proves the
+      # Kit + Panel core compile on Linux (the SwiftUI app/UI target is excluded).
+      - name: Build macerodactyld (Linux, swift:6.1 container)
+        run: |
+          docker run --rm -v "$PWD/MacerodactylKit":/src -w /src swift:6.1 bash -euxc '
+            apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev
+            swift build -c release --product macerodactyld
+            swift build -c release --product kitcheck
+          '
+      # Real-Docker end-to-end: ubuntu runners have dockerd natively (no nested
+      # virt needed, unlike macOS runners), so build the image and confirm the
+      # panel actually serves /healthz against the real daemon.
+      - name: Build the panel image
+        run: docker build -t macerodactyl-panel:ci .
+      - name: Run the panel and curl /healthz
+        run: |
+          docker run -d --name mac-ci -p 27180:27180 \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -e HOME=/root macerodactyl-panel:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:27180/healthz; then echo "  <- panel is up"; ok=1; break; fi
+            sleep 1
+          done
+          docker logs mac-ci || true
+          docker rm -f mac-ci
+          test -n "$ok"
