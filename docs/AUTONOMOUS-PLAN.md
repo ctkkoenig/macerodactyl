@@ -62,11 +62,11 @@ Explore → Plan (record fork+choice) → Build → Verify (tests + REAL process
 - [x] T5.2 Homebrew cask + release workflow PREPARED, not published. AC: files exist, documented as manual-flip; distribution designed around no-notarization.
 
 ### Tier 6 — harden untested
-- [ ] T6.1 XCUITest for views. AC: at least a smoke UI test that launches and asserts key screens (may be limited by headless CI; record).
-- [ ] T6.2 Fuzzing for path-confinement + stats/ps parsers. AC: a fuzz harness (swift) that throws random/adversarial inputs; no crash, no escape.
-- [ ] T6.3 Property tests for the scoping matrix. AC: randomized grant sets, invariant: no view ⇒ nothing; independent perms; admin all.
-- [ ] T6.4 Adversarial pass: actively try to break the boundaries; log everything tried incl. what failed to break.
-- [ ] T6.5 TOTP 2FA (HummingbirdOTP) + session listing/revocation. Skip OIDC. AC: enroll TOTP, login requires it, gated; sessions listable + revocable; tested.
+- [x] T6.1 XCUITest for views. AC: at least a smoke UI test that launches and asserts key screens (may be limited by headless CI; record).
+- [x] T6.2 Fuzzing for path-confinement + stats/ps parsers. AC: a fuzz harness (swift) that throws random/adversarial inputs; no crash, no escape.
+- [x] T6.3 Property tests for the scoping matrix. AC: randomized grant sets, invariant: no view ⇒ nothing; independent perms; admin all.
+- [x] T6.4 Adversarial pass: actively try to break the boundaries; log everything tried incl. what failed to break.
+- [x] T6.5 TOTP 2FA (HummingbirdOTP) + session listing/revocation. Skip OIDC. AC: enroll TOTP, login requires it, gated; sessions listable + revocable; tested.
 
 ### If finished
 - [ ] Fresh-eyes review: error messages, weakest tests, dead code, updated assessment.
