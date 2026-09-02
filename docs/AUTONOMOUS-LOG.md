@@ -99,3 +99,9 @@ Append-only. Newest at bottom. Each entry: date, item, what I did, decisions
 - **New**: `ContainerLifecycle` helper (one impl for GUI + daemon services); `DockerCLI.streamLines(mergeStderr:)` so pull/compose progress (on stderr) streams live. Compose ops require the plugin (Docker Desktop ships it) → clear error stream otherwise.
 - **Live (safe, read-only)**: `docker system df` returns the table; compose plugin **v2.35.1** present → recreate/apply supported. Destructive ops (remove/recreate/prune) deliberately NOT run live to avoid disrupting fixtures/daemon; covered by unit + HTTP tests.
 - Tests: lifecycle gating (403 without perm, service never reached), remove running→409 / stopped→ok, pull+recreate streamed, compose apply streamed+gated, maintenance admin-only (non-admin 404), `.lifecycle` independent + requires-view, v5 migration persist. **183 tests**, lint clean, app builds.
+
+## 2026-09-02 — Tier 2 boundary audit (in progress)
+- **Mechanical**: full suite **183** green; no leaked home paths/usernames in source (git grep clean).
+- **Docs-match-reality**: updated CLAUDE.md's scoping section to 6 permissions (added schedules + lifecycle; noted lifecycle is separate from power) and documented that daemon-global maintenance is admin-only (404 to hide the surface).
+- **Portability**: metrics prune uses SQLite window functions (`ROW_NUMBER() OVER (PARTITION BY …)`), which need SQLite ≥ 3.25. macOS system libsqlite3 is 3.51 — verified the query runs. **Tier 4 note**: confirm the Linux swift image's libsqlite3 is ≥ 3.25 (Debian bookworm ships 3.40+, so fine, but verify when the Linux build lands).
+- **Security review**: launched a fresh-eyes subagent over the Tier 2 diff (file-manager confinement on every new op, lifecycle gating, the new permission, admin-only maintenance, log/metrics endpoints, streamLines teardown). Findings to be actioned when it returns.
