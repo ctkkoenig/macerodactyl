@@ -318,6 +318,113 @@ import Testing
         #expect(try String(contentsOf: secret, encoding: .utf8) == "TOP SECRET")
     }
 
+    // MARK: Lifecycle (T2.1)
+
+    @Test func lifecycleRequiresLifecyclePermission() async throws {
+        // view+power but NOT lifecycle → pull/recreate/remove all 403.
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, power: true))
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            try await client.execute(uri: "/api/containers/bot/pull", method: .post, headers: headers(token, csrf: true)) {
+                #expect($0.status == .forbidden)
+            }
+            try await client.execute(uri: "/api/containers/bot/recreate", method: .post, headers: headers(token, csrf: true)) {
+                #expect($0.status == .forbidden)
+            }
+            try await client.execute(uri: "/api/containers/bot/remove", method: .delete, headers: headers(token, csrf: true)) {
+                #expect($0.status == .forbidden)
+            }
+        }
+        #expect(harness.service.lifecycleCalls.isEmpty)  // never reached the service
+    }
+
+    @Test func lifecyclePullAndRecreateStreamWhenGranted() async throws {
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, lifecycle: true))
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            try await client.execute(uri: "/api/containers/bot/pull", method: .post, headers: headers(token, csrf: true)) {
+                response in
+                #expect(response.status == .ok)
+                #expect(String(buffer: response.body).contains("Pull complete"))
+            }
+            try await client.execute(uri: "/api/containers/bot/recreate", method: .post, headers: headers(token, csrf: true)) {
+                response in
+                #expect(response.status == .ok)
+                #expect(String(buffer: response.body).contains("Started"))
+            }
+        }
+        #expect(harness.service.lifecycleCalls.contains { $0.op == "pull" && $0.name == "bot" })
+        #expect(harness.service.lifecycleCalls.contains { $0.op == "recreate" && $0.name == "bot" })
+    }
+
+    @Test func removeRefusesRunningButSucceedsStopped() async throws {
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, lifecycle: true))
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            // bot is running → 409 conflict, service not mutated.
+            try await client.execute(uri: "/api/containers/bot/remove", method: .delete, headers: headers(token, csrf: true)) {
+                #expect($0.status == .conflict)
+            }
+            #expect(!harness.service.lifecycleCalls.contains { $0.op == "remove" })
+            // Stop it (replace the fixture with a stopped one) → remove succeeds.
+            harness.service.fixtures["bot"] = .init(
+                container: .fixture(name: "bot", workingDir: harness.botStackRoot.path, running: false),
+                stackRoot: harness.botStackRoot)
+            try await client.execute(uri: "/api/containers/bot/remove", method: .delete, headers: headers(token, csrf: true)) {
+                #expect($0.status == .ok)
+            }
+        }
+        #expect(harness.service.lifecycleCalls.contains { $0.op == "remove" && $0.name == "bot" })
+    }
+
+    @Test func composeApplyStreamsAndIsLifecycleGated() async throws {
+        // Without lifecycle → 403; with it → streamed output. (T2.2)
+        let denied = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, files: true))
+        try await denied.app.test(.router) { client in
+            let token = try await loginToken(client, denied)
+            try await client.execute(
+                uri: "/api/containers/bot/compose/apply", method: .post, headers: headers(token, csrf: true)
+            ) { #expect($0.status == .forbidden) }
+        }
+        let granted = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, lifecycle: true))
+        try await granted.app.test(.router) { client in
+            let token = try await loginToken(client, granted)
+            try await client.execute(
+                uri: "/api/containers/bot/compose/apply", method: .post, headers: headers(token, csrf: true)
+            ) { response in
+                #expect(response.status == .ok)
+                #expect(String(buffer: response.body).contains("Done"))
+            }
+        }
+        #expect(granted.service.lifecycleCalls.contains { $0.op == "compose" && $0.name == "bot" })
+    }
+
+    @Test func maintenanceIsAdminOnly() async throws {
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, lifecycle: true))
+        try await harness.app.test(.router) { client in
+            // scoped (non-admin) → maintenance surface is 404 (existence hidden).
+            let scopedToken = try await loginToken(client, harness)
+            try await client.execute(uri: "/api/maintenance/disk", method: .get, headers: headers(scopedToken)) {
+                #expect($0.status == .notFound)
+            }
+            try await client.execute(
+                uri: "/api/maintenance/image-prune", method: .post, headers: headers(scopedToken, csrf: true)
+            ) { #expect($0.status == .notFound) }
+            // admin → allowed.
+            let adminToken = try await loginToken(client, harness, admin: true)
+            try await client.execute(uri: "/api/maintenance/disk", method: .get, headers: headers(adminToken)) {
+                #expect($0.status == .ok)
+            }
+            try await client.execute(
+                uri: "/api/maintenance/image-prune", method: .post, headers: headers(adminToken, csrf: true)
+            ) { response in
+                #expect(response.status == .ok)
+                #expect(String(buffer: response.body).contains("reclaimed"))
+            }
+        }
+        #expect(harness.service.lifecycleCalls.contains { $0.op == "image-prune" })
+    }
+
     // MARK: Log search + download (T2.4)
 
     @Test func logSearchFiltersAndDownloadReturnsAttachment() async throws {

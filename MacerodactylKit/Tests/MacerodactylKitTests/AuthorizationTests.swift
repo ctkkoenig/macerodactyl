@@ -52,6 +52,25 @@ private func makeContainer(name: String, project: String? = nil, workingDir: Str
         #expect(!engine.can(.console, containerNamed: "bot"))
     }
 
+    @Test func lifecycleIsIndependentAndRequiresView() {
+        // lifecycle does NOT come with power, and like every permission it needs
+        // view — "can restart" must never imply "can destroy".
+        let withLifecycle = AuthorizationEngine(
+            isAdmin: false, grants: ["bot": ContainerGrant(view: true, power: true, lifecycle: false)])
+        #expect(withLifecycle.can(.power, containerNamed: "bot"))
+        #expect(!withLifecycle.can(.lifecycle, containerNamed: "bot"))
+
+        let granted = AuthorizationEngine(
+            isAdmin: false, grants: ["bot": ContainerGrant(view: true, lifecycle: true)])
+        #expect(granted.can(.lifecycle, containerNamed: "bot"))
+        #expect(!granted.can(.power, containerNamed: "bot"))  // independent
+
+        // lifecycle without view leaks nothing.
+        let noView = AuthorizationEngine(
+            isAdmin: false, grants: ["bot": ContainerGrant(view: false, lifecycle: true)])
+        #expect(!noView.can(.lifecycle, containerNamed: "bot"))
+    }
+
     @Test func nothingWorksWithoutView() {
         // A malformed grant (power without view) must not leak anything.
         let engine = AuthorizationEngine(

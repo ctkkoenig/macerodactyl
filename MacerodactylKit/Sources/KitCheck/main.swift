@@ -305,6 +305,30 @@ case "stats":
         print(leaked.isEmpty ? "teardown: OK — no leaked docker stats process" : "teardown: LEAK:\n\(leaked)")
     }
 
+case "metrics":
+    // Exercises the T2.4 retained-metrics pipeline against REAL docker: take a
+    // live snapshot, persist each sample to a throwaway SQLite, prune, read back.
+    do {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "kitcheck-metrics-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try PanelDataStore(databasePath: dir.appending(path: "m.sqlite").path)
+        let snap = try await cli.statsSnapshot()
+        for sample in snap.values { try store.recordMetric(sample) }
+        try store.pruneMetrics(maxAge: 24 * 3_600, maxPerContainer: 5_000)
+        print("recorded \(snap.count) sample(s); total retained = \(try store.metricsCount())")
+        for name in snap.keys.sorted() {
+            let series = try store.metrics(container: name)
+            let last = series.last
+            print(
+                "  \(name): \(series.count) row(s), last cpu \(last.map { String(format: "%.1f", $0.cpuPercent) } ?? "-")% at \(last?.measuredAt.description ?? "-")"
+            )
+        }
+        print("round-trip: OK — snapshot persisted and read back")
+    } catch DockerError.daemonUnavailable {
+        print("daemon down — nothing to sample")
+    }
+
 case nil:
     await listContainers()
 

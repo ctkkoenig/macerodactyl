@@ -102,4 +102,27 @@ public struct DaemonContainerService: ContainerService {
     public func dockerReachable() async -> Bool {
         (try? await cli.run(["version", "--format", "{{.Server.Version}}"], timeout: .seconds(5))) != nil
     }
+
+    public func pullImage(containerName: String) async -> AsyncThrowingStream<String, Error>? {
+        guard let container = await container(named: containerName) else { return nil }
+        return ContainerLifecycle.pull(cli: cli, container: container)
+    }
+
+    public func recreate(containerName: String) async -> AsyncThrowingStream<String, Error>? {
+        guard let container = await container(named: containerName) else { return nil }
+        return await ContainerLifecycle.composeUp(cli: cli, container: container, forceRecreate: true)
+    }
+
+    public func composeApply(containerName: String) async -> AsyncThrowingStream<String, Error>? {
+        guard let container = await container(named: containerName) else { return nil }
+        return await ContainerLifecycle.composeUp(cli: cli, container: container, forceRecreate: false)
+    }
+
+    public func remove(containerName: String) async throws {
+        guard let container = await container(named: containerName) else { throw ContainerServiceError.notFound }
+        try await ContainerLifecycle.remove(cli: cli, container: container)
+    }
+
+    public func imagePrune() async throws -> String { try await ContainerLifecycle.imagePrune(cli: cli) }
+    public func diskUsage() async throws -> String { try await ContainerLifecycle.diskUsage(cli: cli) }
 }

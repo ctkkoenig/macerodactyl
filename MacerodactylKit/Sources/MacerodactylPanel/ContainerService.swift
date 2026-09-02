@@ -35,6 +35,26 @@ public protocol ContainerService: Sendable {
     func removeSchedule(containerName: String) async throws
     /// Whether the docker daemon is reachable right now (bounded, best-effort).
     func dockerReachable() async -> Bool
+
+    // MARK: Lifecycle (gated on the `.lifecycle` permission)
+
+    /// Streams `docker pull` for the container's image, or nil if it doesn't exist.
+    func pullImage(containerName: String) async -> AsyncThrowingStream<String, Error>?
+    /// Recreates just this service (`compose up -d --force-recreate <service>`),
+    /// streamed. nil if the container has no stack folder.
+    func recreate(containerName: String) async -> AsyncThrowingStream<String, Error>?
+    /// Applies the stack's compose file (`compose up -d`), streamed. nil if the
+    /// container has no stack folder.
+    func composeApply(containerName: String) async -> AsyncThrowingStream<String, Error>?
+    /// Removes the container (must be stopped). Throws on conflict/failure.
+    func remove(containerName: String) async throws
+
+    // MARK: Daemon-global maintenance (admin-only at the route layer)
+
+    /// `docker image prune -f` — reclaims dangling images across the daemon.
+    func imagePrune() async throws -> String
+    /// `docker system df` — disk usage summary.
+    func diskUsage() async throws -> String
 }
 
 /// Live implementation backed by the shared `ContainerStore` (native source of
@@ -141,10 +161,49 @@ public struct LiveContainerService: ContainerService {
         guard let cli = await MainActor.run(body: { store.cli }) else { return false }
         return (try? await cli.run(["version", "--format", "{{.Server.Version}}"], timeout: .seconds(5))) != nil
     }
+
+    public func pullImage(containerName: String) async -> AsyncThrowingStream<String, Error>? {
+        guard let container = await container(named: containerName), let cli = await MainActor.run(body: { store.cli })
+        else { return nil }
+        return ContainerLifecycle.pull(cli: cli, container: container)
+    }
+
+    public func recreate(containerName: String) async -> AsyncThrowingStream<String, Error>? {
+        guard let container = await container(named: containerName), let cli = await MainActor.run(body: { store.cli })
+        else { return nil }
+        return await ContainerLifecycle.composeUp(cli: cli, container: container, forceRecreate: true)
+    }
+
+    public func composeApply(containerName: String) async -> AsyncThrowingStream<String, Error>? {
+        guard let container = await container(named: containerName), let cli = await MainActor.run(body: { store.cli })
+        else { return nil }
+        return await ContainerLifecycle.composeUp(cli: cli, container: container, forceRecreate: false)
+    }
+
+    public func remove(containerName: String) async throws {
+        guard let container = await container(named: containerName), let cli = await MainActor.run(body: { store.cli })
+        else { throw ContainerServiceError.notFound }
+        try await ContainerLifecycle.remove(cli: cli, container: container)
+    }
+
+    public func imagePrune() async throws -> String {
+        guard let cli = await MainActor.run(body: { store.cli }) else { throw ContainerServiceError.notFound }
+        return try await ContainerLifecycle.imagePrune(cli: cli)
+    }
+
+    public func diskUsage() async throws -> String {
+        guard let cli = await MainActor.run(body: { store.cli }) else { throw ContainerServiceError.notFound }
+        return try await ContainerLifecycle.diskUsage(cli: cli)
+    }
 }
 
 public enum ContainerServiceError: Error, Equatable, Sendable {
     case notFound
+    /// The operation can't run in the container's current state (e.g. removing a
+    /// running container). Carries a human-readable reason.
+    case conflict(String)
+    /// A prerequisite tool is unavailable (e.g. the docker compose plugin).
+    case unavailable(String)
 }
 
 /// Client-facing messages for file errors, matching the native app's wording.

@@ -92,6 +92,44 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
     func removeSchedule(containerName: String) async throws {
         lock.withLock { scheduleCalls.append(("remove", containerName)) }
     }
+
+    // Lifecycle — records the op and streams a couple of canned progress lines.
+    private(set) var lifecycleCalls: [(op: String, name: String)] = []
+    private func cannedStream(_ lines: [String]) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            for line in lines { continuation.yield(line) }
+            continuation.finish()
+        }
+    }
+
+    func pullImage(containerName: String) async -> AsyncThrowingStream<String, Error>? {
+        guard fixtures[containerName] != nil else { return nil }
+        lock.withLock { lifecycleCalls.append(("pull", containerName)) }
+        return cannedStream(["Pulling img:latest", "Pull complete"])
+    }
+    func recreate(containerName: String) async -> AsyncThrowingStream<String, Error>? {
+        guard fixtures[containerName] != nil else { return nil }
+        lock.withLock { lifecycleCalls.append(("recreate", containerName)) }
+        return cannedStream(["Recreating", "Started"])
+    }
+    func composeApply(containerName: String) async -> AsyncThrowingStream<String, Error>? {
+        guard fixtures[containerName] != nil else { return nil }
+        lock.withLock { lifecycleCalls.append(("compose", containerName)) }
+        return cannedStream(["Applying compose", "Done"])
+    }
+    func remove(containerName: String) async throws {
+        guard let fixture = fixtures[containerName] else { throw ContainerServiceError.notFound }
+        guard !fixture.container.isRunning else { throw ContainerServiceError.conflict("running") }
+        lock.withLock { lifecycleCalls.append(("remove", containerName)) }
+    }
+
+    var pruneResult = "Total reclaimed space: 1.2GB"
+    var diskResult = "TYPE  TOTAL  ACTIVE  SIZE  RECLAIMABLE"
+    func imagePrune() async throws -> String {
+        lock.withLock { lifecycleCalls.append(("image-prune", "*")) }
+        return pruneResult
+    }
+    func diskUsage() async throws -> String { diskResult }
 }
 
 extension DockerContainer {

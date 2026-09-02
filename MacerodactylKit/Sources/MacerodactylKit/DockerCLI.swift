@@ -76,7 +76,10 @@ public struct DockerCLI: Sendable {
 
     /// Streams stdout of `docker <args>` line by line (used for `logs --follow`).
     /// Terminating the stream's consumer terminates the process.
-    public func streamLines(_ args: [String]) -> AsyncThrowingStream<String, Error> {
+    /// When `mergeStderr` is true, stderr lines are ALSO yielded live (still
+    /// captured for error reporting). Needed for `docker pull` / `docker compose`
+    /// which write their progress to stderr, not stdout.
+    public func streamLines(_ args: [String], mergeStderr: Bool = false) -> AsyncThrowingStream<String, Error> {
         let binary = self.binary
         return AsyncThrowingStream { continuation in
             let process = Process()
@@ -93,12 +96,21 @@ public struct DockerCLI: Sendable {
             process.standardInput = FileHandle.nullDevice
 
             let stderrBox = DataBox()
+            let stderrLineBox = DataBox()
             errPipe.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
                 if chunk.isEmpty {
                     handle.readabilityHandler = nil
+                    if mergeStderr, let last = stderrLineBox.drainRemainder() {
+                        continuation.yield(last)
+                    }
                 } else {
                     stderrBox.append(chunk)
+                    if mergeStderr {
+                        for line in stderrLineBox.appendAndSplitLines(chunk) {
+                            continuation.yield(line)
+                        }
+                    }
                 }
             }
 

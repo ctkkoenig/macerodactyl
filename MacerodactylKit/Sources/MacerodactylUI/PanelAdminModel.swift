@@ -140,6 +140,7 @@ public final class PanelAdminModel {
         case .files: grant.files = on
         case .console: grant.console = on
         case .schedules: grant.schedules = on
+        case .lifecycle: grant.lifecycle = on
         }
         // Turning off view removes everything — nothing works without it.
         if permission == .view, !on { grant = ContainerGrant() }

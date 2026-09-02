@@ -132,6 +132,20 @@ import Testing
         #expect(try reopened.metrics(container: "bot").count == 1)
     }
 
+    @Test func lifecyclePermissionPersistsAcrossReopen() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let path = dir.appending(path: "g.sqlite").path
+        do {
+            let store = try PanelDataStore(databasePath: path)
+            let user = try store.createUser(username: "a", passwordHash: "h", isAdmin: false)
+            try store.setGrant(userID: user.id, containerName: "bot", grant: ContainerGrant(view: true, lifecycle: true))
+        }
+        let reopened = try PanelDataStore(databasePath: path)
+        let user = try #require(try reopened.user(named: "a"))
+        #expect(try reopened.grants(forUserID: user.id)["bot"]?.lifecycle == true)
+    }
+
     @Test func currentVersionMatchesLatestMigration() throws {
         let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -142,6 +156,6 @@ import Testing
             ContainerStats(
                 name: "x", cpuPercent: 0, memUsedBytes: 0, memLimitBytes: 0, memPercent: 0,
                 netRxBytes: 0, netTxBytes: 0, pids: 0, measuredAt: Date()))
-        #expect(PanelSchema.currentVersion == 4)
+        #expect(PanelSchema.currentVersion == 5)
     }
 }

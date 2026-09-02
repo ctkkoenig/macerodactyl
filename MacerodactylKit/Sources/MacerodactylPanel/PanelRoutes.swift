@@ -69,6 +69,17 @@ struct PanelRoutes {
         scoped.get(":name/schedule", use: apiScheduleGet)
         scoped.post(":name/schedule", use: apiScheduleSet)
         scoped.delete(":name/schedule", use: apiScheduleDelete)
+        // Destructive lifecycle — all gated on the `.lifecycle` permission via
+        // the scope middleware's path mapping. Mutating, so CSRF-protected.
+        scoped.post(":name/pull", use: apiPull)
+        scoped.post(":name/recreate", use: apiRecreate)
+        scoped.post(":name/compose/apply", use: apiComposeApply)
+        scoped.delete(":name/remove", use: apiRemove)
+
+        // Daemon-global maintenance — admin-only (outside any container's scope).
+        let admin = api.group("maintenance").add(middleware: RequireAdmin())
+        admin.get("disk", use: apiDiskUsage)
+        admin.post("image-prune", use: apiImagePrune)
     }
 
     // MARK: HTML pages
@@ -162,7 +173,7 @@ struct PanelRoutes {
 
     struct GrantDTO: Encodable {
         let container: String
-        let view, power, files, console: Bool
+        let view, power, files, console, schedules, lifecycle: Bool
     }
     struct MeResponse: Encodable {
         let username: String
@@ -177,7 +188,9 @@ struct PanelRoutes {
             username: user.username,
             isAdmin: user.isAdmin,
             grants: grants.map { name, grant in
-                GrantDTO(container: name, view: grant.view, power: grant.power, files: grant.files, console: grant.console)
+                GrantDTO(
+                    container: name, view: grant.view, power: grant.power, files: grant.files, console: grant.console,
+                    schedules: grant.schedules, lifecycle: grant.lifecycle)
             }.sorted { $0.container < $1.container }
         )
         return encode(dto)
@@ -212,7 +225,7 @@ struct PanelRoutes {
         let stack: String?
         let permissions: Permissions
         let filesAvailable: Bool
-        struct Permissions: Encodable { let view, power, files, console: Bool }
+        struct Permissions: Encodable { let view, power, files, console, schedules, lifecycle: Bool }
     }
 
     @Sendable func apiContainerDetail(_ request: Request, context: PanelRequestContext) async throws -> Response {
@@ -229,7 +242,8 @@ struct PanelRoutes {
                 health: container.health?.rawValue, stack: container.composeProject,
                 permissions: .init(
                     view: engine.can(.view, containerNamed: name), power: engine.can(.power, containerNamed: name),
-                    files: engine.can(.files, containerNamed: name), console: engine.can(.console, containerNamed: name)
+                    files: engine.can(.files, containerNamed: name), console: engine.can(.console, containerNamed: name),
+                    schedules: engine.can(.schedules, containerNamed: name), lifecycle: engine.can(.lifecycle, containerNamed: name)
                 ),
                 filesAvailable: await containers.fileService(containerName: name) != nil
             ))
@@ -258,6 +272,88 @@ struct PanelRoutes {
             audit(
                 user: user.username, action: "container.power", container: name, outcome: "error",
                 ip: context.clientIP, detail: "\(action.rawValue): \(error)")
+            return json(["error": "\(error)"], status: .internalServerError)
+        }
+    }
+
+    // MARK: Lifecycle (gated on .lifecycle)
+
+    @Sendable func apiPull(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let stream = await containers.pullImage(containerName: name) else { throw notFound() }
+        audit(user: user.username, action: "container.lifecycle", container: name, outcome: "ok", ip: context.clientIP, detail: "pull")
+        return Self.sseResponse(payloads: stream)
+    }
+
+    @Sendable func apiRecreate(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let stream = await containers.recreate(containerName: name) else {
+            // No stack folder → recreate isn't possible for this container.
+            return json(["error": "This container has no compose stack, so it can't be recreated."], status: .unprocessableContent)
+        }
+        audit(
+            user: user.username, action: "container.lifecycle", container: name, outcome: "ok", ip: context.clientIP,
+            detail: "recreate")
+        return Self.sseResponse(payloads: stream)
+    }
+
+    @Sendable func apiComposeApply(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let stream = await containers.composeApply(containerName: name) else {
+            return json(["error": "This container has no compose stack."], status: .unprocessableContent)
+        }
+        audit(
+            user: user.username, action: "container.lifecycle", container: name, outcome: "ok", ip: context.clientIP,
+            detail: "compose apply")
+        return Self.sseResponse(payloads: stream)
+    }
+
+    @Sendable func apiRemove(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        do {
+            try await containers.remove(containerName: name)
+            audit(
+                user: user.username, action: "container.lifecycle", container: name, outcome: "ok", ip: context.clientIP,
+                detail: "remove")
+            return json(["ok": true])
+        } catch ContainerServiceError.notFound {
+            throw notFound()
+        } catch let ContainerServiceError.conflict(reason) {
+            audit(
+                user: user.username, action: "container.lifecycle", container: name, outcome: "denied", ip: context.clientIP,
+                detail: "remove: \(reason)")
+            return json(["error": reason], status: .conflict)
+        } catch {
+            audit(
+                user: user.username, action: "container.lifecycle", container: name, outcome: "error", ip: context.clientIP,
+                detail: "remove: \(error)")
+            return json(["error": "\(error)"], status: .internalServerError)
+        }
+    }
+
+    // MARK: Daemon-global maintenance (admin-only)
+
+    @Sendable func apiDiskUsage(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let output = (try? await containers.diskUsage()) ?? ""
+        audit(user: user.username, action: "maintenance.disk", container: nil, outcome: "ok", ip: context.clientIP)
+        return encode(["output": output])
+    }
+
+    @Sendable func apiImagePrune(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        do {
+            let output = try await containers.imagePrune()
+            audit(user: user.username, action: "maintenance.image-prune", container: nil, outcome: "ok", ip: context.clientIP)
+            return encode(["output": output])
+        } catch {
+            audit(
+                user: user.username, action: "maintenance.image-prune", container: nil, outcome: "error", ip: context.clientIP,
+                detail: "\(error)")
             return json(["error": "\(error)"], status: .internalServerError)
         }
     }

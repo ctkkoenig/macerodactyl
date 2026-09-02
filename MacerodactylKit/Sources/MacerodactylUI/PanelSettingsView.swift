@@ -203,6 +203,7 @@ struct GrantRow: View {
                 permToggle("Files", grant.files, disabled: !container.filesGrantable) { model.setPermission(user, container, .files, $0) }
                 permToggle("Console", grant.console) { model.setPermission(user, container, .console, $0) }
                 permToggle("Schedules", grant.schedules) { model.setPermission(user, container, .schedules, $0) }
+                permToggle("Lifecycle", grant.lifecycle) { model.setPermission(user, container, .lifecycle, $0) }
             }
             if !container.filesGrantable {
                 Text("No stack folder — file access unavailable").font(.caption2).foregroundStyle(.tertiary)

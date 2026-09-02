@@ -56,6 +56,20 @@ struct RequireAuth: RouterMiddleware {
     }
 }
 
+/// Requires an admin identity; otherwise 404 (existence of the maintenance
+/// surface is not revealed to non-admins). Used for daemon-global operations
+/// (image prune, disk usage) that fall outside any single container's scope and
+/// so must never be reachable by a scoped user.
+struct RequireAdmin: RouterMiddleware {
+    typealias Context = PanelRequestContext
+
+    func handle(_ request: Request, context: Context, next: (Request, Context) async throws -> Response) async throws -> Response {
+        let user = try context.requireIdentity()
+        guard user.isAdmin else { throw HTTPError(.notFound) }
+        return try await next(request, context)
+    }
+}
+
 /// Container-level scoping, applied to the whole container route group so every
 /// current and future container route inherits it — no route re-implements its
 /// own check. The permission a route requires is derived here from its path and
@@ -114,7 +128,8 @@ struct ContainerScopeMiddleware: RouterMiddleware {
         case "schedule": return .schedules
         case "console": return .console
         case "power": return .power
-        default: return .view  // detail, logs, stats
+        case "pull", "recreate", "remove", "compose": return .lifecycle
+        default: return .view  // detail, logs, stats, metrics
         }
     }
 
@@ -125,6 +140,7 @@ struct ContainerScopeMiddleware: RouterMiddleware {
         case .files: "container.files"
         case .console: "container.console"
         case .schedules: "container.schedules"
+        case .lifecycle: "container.lifecycle"
         }
     }
 }

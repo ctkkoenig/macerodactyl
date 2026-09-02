@@ -7,6 +7,10 @@ public enum ContainerPermission: String, CaseIterable, Sendable, Codable {
     case files
     case console
     case schedules
+    /// Dangerous per-container mutations beyond start/stop: pull the image,
+    /// recreate the container, remove it. Deliberately separate from `power` so
+    /// "can restart" never implies "can destroy".
+    case lifecycle
 }
 
 /// Per-container grant for one user. Keyed by container *name*: compose
@@ -19,13 +23,19 @@ public struct ContainerGrant: Sendable, Equatable, Codable {
     public var console: Bool
     /// Manage scheduled restarts (create/edit/delete launchd agents) over HTTP.
     public var schedules: Bool
+    /// Pull/recreate/remove this container (destructive lifecycle).
+    public var lifecycle: Bool
 
-    public init(view: Bool = false, power: Bool = false, files: Bool = false, console: Bool = false, schedules: Bool = false) {
+    public init(
+        view: Bool = false, power: Bool = false, files: Bool = false, console: Bool = false,
+        schedules: Bool = false, lifecycle: Bool = false
+    ) {
         self.view = view
         self.power = power
         self.files = files
         self.console = console
         self.schedules = schedules
+        self.lifecycle = lifecycle
     }
 
     public func allows(_ permission: ContainerPermission) -> Bool {
@@ -35,10 +45,11 @@ public struct ContainerGrant: Sendable, Equatable, Codable {
         case .files: files
         case .console: console
         case .schedules: schedules
+        case .lifecycle: lifecycle
         }
     }
 
-    public var isEmpty: Bool { !view && !power && !files && !console && !schedules }
+    public var isEmpty: Bool { !view && !power && !files && !console && !schedules && !lifecycle }
 }
 
 /// Pure scoping logic — THE security boundary of the web panel. No I/O, no
