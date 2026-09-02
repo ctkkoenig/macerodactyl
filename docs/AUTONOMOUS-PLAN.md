@@ -34,21 +34,21 @@ Explore → Plan (record fork+choice) → Build → Verify (tests + REAL process
 ## Tiers & tasks (check as done)
 
 ### Tier 0 — prove the work (CI)
-- [ ] T0.1 GitHub Actions workflow: `swift test` (full suite) on macOS runner every push/PR. AC: `.github/workflows/ci.yml` exists; job builds Kit + runs tests; would go green (validate YAML + logic locally; can't run Actions here, so verify by `act`-style reasoning + a local dry run of each step).
-- [ ] T0.2 Formatting + lint gate. AC: `swift format lint` (or bundled) runs in CI and locally clean; a `.swift-format` config committed. Decide swift-format vs swiftlint (prefer toolchain swift-format — no extra dep).
-- [ ] T0.3 Integration job: stand up real Docker on the runner, exercise end-to-end (kitcheck against a fixture container + a curl pass against the panel). AC: a separate CI job using a docker-on-macos approach (colima) OR document why macOS runners can't and provide a Linux-server integration job once Tier 4 lands. Record decision.
+- [x] T0.1 GitHub Actions workflow: `swift test` (full suite) on macOS runner every push/PR. AC: `.github/workflows/ci.yml` exists; job builds Kit + runs tests; would go green (validate YAML + logic locally; can't run Actions here, so verify by `act`-style reasoning + a local dry run of each step).
+- [x] T0.2 Formatting + lint gate. AC: `swift format lint` (or bundled) runs in CI and locally clean; a `.swift-format` config committed. Decide swift-format vs swiftlint (prefer toolchain swift-format — no extra dep).
+- [x] T0.3 Integration job: stand up real Docker on the runner, exercise end-to-end (kitcheck against a fixture container + a curl pass against the panel). AC: a separate CI job using a docker-on-macos approach (colima) OR document why macOS runners can't and provide a Linux-server integration job once Tier 4 lands. Record decision.
 
 ### Tier 1 — make it trustworthy
-- [ ] T1.1 Decouple panel into a supervised process surviving app quit/logout/crash, self-restarting; GUI becomes a client. Decide LaunchAgent vs LaunchDaemon (weigh autologin). AC: quitting the GUI leaves the panel serving; killing the panel process → it restarts; still never starts containers at boot; GUI reflects live state via the running server. Real verification: kill -9 the daemon, confirm relaunch; quit GUI, confirm curl still 200.
-- [ ] T1.2 Rate-limiter → SQLite (survives restart). AC: fail logins to lockout, restart the server process, lockout persists; unit test with a persistent store.
-- [ ] T1.3 Health endpoint `/healthz` (unauthenticated, minimal: ok + version + daemon reachability). AC: returns 200 JSON; no secrets; tested.
-- [ ] T1.4 WAL checkpointing, DB backup/restore, integrity checks. AC: a backup command produces a restorable copy; `PRAGMA integrity_check` wired; documented; tested.
+- [x] T1.1 Decouple panel into a supervised process surviving app quit/logout/crash, self-restarting; GUI becomes a client. Decide LaunchAgent vs LaunchDaemon (weigh autologin). AC: quitting the GUI leaves the panel serving; killing the panel process → it restarts; still never starts containers at boot; GUI reflects live state via the running server. Real verification: kill -9 the daemon, confirm relaunch; quit GUI, confirm curl still 200.
+- [x] T1.2 Rate-limiter → SQLite (survives restart). AC: fail logins to lockout, restart the server process, lockout persists; unit test with a persistent store.
+- [x] T1.3 Health endpoint `/healthz` (unauthenticated, minimal: ok + version + daemon reachability). AC: returns 200 JSON; no secrets; tested.
+- [x] T1.4 WAL checkpointing, DB backup/restore, integrity checks. AC: a backup command produces a restorable copy; `PRAGMA integrity_check` wired; documented; tested.
 - [x] T1.5 First-class TLS for LAN bind (self-signed or ACME) + `Secure` cookie when bound LAN. Tunnel stays recommended default. AC: enabling LAN can offer HTTPS; cookie gains Secure over TLS; verify a real TLS handshake locally (curl -k). **Done** 2026-09-02: self-signed via openssl, HummingbirdTLS/NIOSSL, Secure cookie, GUI toggle; verified live handshake; 149 tests green.
 
 ### Tier 2 — worth opening daily
 - [ ] T2.1 Container lifecycle: create, recreate, remove, image pull/prune, volumes, networks, env editing. Each: confirmation + audit + permission gate. Decide if the 5 perms suffice or lifecycle needs its own. AC: gated (403 without), audited, destructive ops confirmed server-side too; traversal/argv-injection safe.
 - [ ] T2.2 Compose: view + apply compose file with streamed output. AC: gated on files or a new perm; streamed via SSE; confined to stack folder.
-- [ ] T2.3 Real file manager: upload, download, mkdir, rename, delete, binary handling — all via existing confinement. AC: re-run ALL traversal shapes against EVERY new endpoint (HTTP-level tests); binary download works; no parallel path.
+- [x] T2.3 Real file manager: upload, download, mkdir, rename, delete, binary handling — all via existing confinement. AC: re-run ALL traversal shapes against EVERY new endpoint (HTTP-level tests); binary download works; no parallel path.
 - [ ] T2.4 Retained metrics (ring-buffer stats → SQLite) + persistent searchable logs + download. Retention policy w/ safe default (won't fill disk). AC: retention enforced + tested; disk cost bounded; search works.
 
 ### Tier 3 — end the XSS liability
