@@ -197,7 +197,7 @@ public enum PanelBackup {
 /// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
 /// scoping, and audit never have to be retrofitted into the data model.
 public enum PanelSchema {
-    public static let currentVersion = 3
+    public static let currentVersion = 4
 
     public static func migrate(_ db: Database) throws {
         if db.userVersion < 1 {
@@ -256,6 +256,27 @@ public enum PanelSchema {
                 );
                 """)
             db.userVersion = 3
+        }
+        if db.userVersion < 4 {
+            // Retained resource metrics — a bounded time series per container for
+            // history beyond the live stream. Pruned by age + a per-container row
+            // cap so it can never fill the disk.
+            try db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    container TEXT NOT NULL,
+                    measured_at TEXT NOT NULL,
+                    cpu_percent REAL NOT NULL,
+                    mem_used_bytes REAL NOT NULL,
+                    mem_limit_bytes REAL NOT NULL,
+                    net_rx_bytes REAL NOT NULL,
+                    net_tx_bytes REAL NOT NULL,
+                    pids INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_metrics_container_time ON metrics(container, measured_at);
+                """)
+            db.userVersion = 4
         }
     }
 }
@@ -489,5 +510,82 @@ public final class PanelDataStore: Sendable {
     /// standing failure count worth keeping. Safe to call periodically.
     public func pruneRateLimits(olderThanISO: String) throws {
         try db.run("DELETE FROM rate_limits WHERE blocked_until IS NOT NULL AND blocked_until <= ?", [.text(olderThanISO)])
+    }
+
+    // MARK: Retained metrics (bounded time series)
+
+    // Formatter is only read (its options are set once), so unsafe-nonisolated is
+    // sound — matching the pattern used elsewhere in this file.
+    nonisolated(unsafe) private static let metricsISO: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    /// Appends one measured sample for a container.
+    public func recordMetric(_ sample: ContainerStats) throws {
+        try db.run(
+            """
+            INSERT INTO metrics
+                (container, measured_at, cpu_percent, mem_used_bytes, mem_limit_bytes, net_rx_bytes, net_tx_bytes, pids)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                .text(sample.name), .text(Self.metricsISO.string(from: sample.measuredAt)),
+                .real(sample.cpuPercent), .real(sample.memUsedBytes), .real(sample.memLimitBytes),
+                .real(sample.netRxBytes), .real(sample.netTxBytes), .integer(Int64(sample.pids)),
+            ])
+    }
+
+    /// Recent samples for a container, oldest→newest, optionally only those on or
+    /// after `since`. `limit` caps how many are returned (newest kept).
+    public func metrics(container: String, since: Date? = nil, limit: Int = 5_000) throws -> [ContainerStats] {
+        var sql = "SELECT * FROM metrics WHERE container = ?"
+        var bindings: [SQLValue] = [.text(container)]
+        if let since {
+            sql += " AND measured_at >= ?"
+            bindings.append(.text(Self.metricsISO.string(from: since)))
+        }
+        sql += " ORDER BY measured_at DESC LIMIT ?"
+        bindings.append(.integer(Int64(max(1, limit))))
+        let rows = try db.query(sql, bindings)
+        return rows.reversed().map { row in
+            ContainerStats(
+                name: row["container"]?.asString ?? container,
+                cpuPercent: row["cpu_percent"]?.asDouble ?? 0,
+                memUsedBytes: row["mem_used_bytes"]?.asDouble ?? 0,
+                memLimitBytes: row["mem_limit_bytes"]?.asDouble ?? 0,
+                memPercent: {
+                    let limit = row["mem_limit_bytes"]?.asDouble ?? 0
+                    let used = row["mem_used_bytes"]?.asDouble ?? 0
+                    return limit > 0 ? used / limit * 100 : 0
+                }(),
+                netRxBytes: row["net_rx_bytes"]?.asDouble ?? 0,
+                netTxBytes: row["net_tx_bytes"]?.asDouble ?? 0,
+                pids: Int(row["pids"]?.asInt ?? 0),
+                measuredAt: (row["measured_at"]?.asString).flatMap { Self.metricsISO.date(from: $0) } ?? Date())
+        }
+    }
+
+    /// Enforces the retention policy: drop samples older than `maxAge`, then cap
+    /// each container to its newest `maxPerContainer` rows. Both bound disk use.
+    public func pruneMetrics(maxAge: TimeInterval, maxPerContainer: Int) throws {
+        let cutoff = Self.metricsISO.string(from: Date().addingTimeInterval(-maxAge))
+        try db.run("DELETE FROM metrics WHERE measured_at < ?", [.text(cutoff)])
+        // Row cap per container: keep the newest N by id.
+        try db.run(
+            """
+            DELETE FROM metrics WHERE id IN (
+                SELECT id FROM (
+                    SELECT id, ROW_NUMBER() OVER (PARTITION BY container ORDER BY id DESC) AS rn FROM metrics
+                ) WHERE rn > ?
+            )
+            """,
+            [.integer(Int64(max(1, maxPerContainer)))])
+    }
+
+    /// Total retained sample count (for tests / housekeeping visibility).
+    public func metricsCount() throws -> Int {
+        Int(try db.query("SELECT COUNT(*) AS c FROM metrics", []).first?["c"]?.asInt ?? 0)
     }
 }

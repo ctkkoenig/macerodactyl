@@ -43,6 +43,7 @@ public actor PanelServer {
     private let store: PanelDataStore
     private let containers: ContainerService
     private let rateLimiter: LoginRateLimiter
+    private let metricsSampler: MetricsSampler
     private var runTask: Task<Void, Never>?
     private(set) public var isRunning = false
 
@@ -51,6 +52,8 @@ public actor PanelServer {
         self.containers = containers
         // Persist throttling in the same SQLite so a restart isn't a reset.
         self.rateLimiter = LoginRateLimiter(store: SQLiteRateLimitStore(store: store))
+        // Retain a bounded stats history while the panel runs.
+        self.metricsSampler = MetricsSampler(store: store, containers: containers)
     }
 
     /// Builds the router with the full middleware stack and routes. Exposed so
@@ -72,6 +75,7 @@ public actor PanelServer {
         var logger = Logger(label: "macerodactyl.panel")
         logger.logLevel = .notice
         isRunning = true
+        await metricsSampler.start()
         runTask = Task { [config, logger] in
             do {
                 try await Self.serve(
@@ -83,6 +87,7 @@ public actor PanelServer {
     }
 
     public func stop() async {
+        await metricsSampler.stop()
         runTask?.cancel()
         runTask = nil
         isRunning = false
@@ -93,6 +98,8 @@ public actor PanelServer {
     /// `macerodactyld` daemon, which launchd supervises — the process must stay
     /// alive for the server's lifetime rather than returning immediately.
     public nonisolated func runUntilTerminated(config: PanelServerConfig, logger: Logger) async throws {
+        await metricsSampler.start()
+        defer { Task { await metricsSampler.stop() } }
         try await Self.serve(router: buildRouter(secureCookies: config.tls != nil), config: config, logger: logger)
     }
 

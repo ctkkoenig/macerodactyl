@@ -16,6 +16,9 @@ public protocol ContainerService: Sendable {
     /// A live log line stream that tears its docker process down when the
     /// consuming task is cancelled (client disconnect).
     func logLines(containerName: String) async -> AsyncThrowingStream<String, Error>?
+    /// A bounded, non-streaming snapshot of recent logs (for search + download),
+    /// or nil if the container doesn't exist / the command fails.
+    func logHistory(containerName: String, tail: Int, since: String?) async -> String?
     /// Run one console command (exec, or RCON for Minecraft).
     func runConsole(containerName: String, command: String) async -> ConsoleEntry?
     /// File service for a container, or nil if it has no stack folder.
@@ -66,6 +69,13 @@ public struct LiveContainerService: ContainerService {
             let cli = await MainActor.run(body: { store.cli })
         else { return nil }
         return LogStreamService.lines(for: container.id, cli: cli)
+    }
+
+    public func logHistory(containerName: String, tail: Int, since: String?) async -> String? {
+        guard let container = await container(named: containerName),
+            let cli = await MainActor.run(body: { store.cli })
+        else { return nil }
+        return await LogStreamService.history(for: container.id, cli: cli, tail: tail, since: since)
     }
 
     public func runConsole(containerName: String, command: String) async -> ConsoleEntry? {

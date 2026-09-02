@@ -37,6 +37,16 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
         }
     }
 
+    func logHistory(containerName: String, tail: Int, since: String?) async -> String? {
+        guard fixtures[containerName] != nil else { return nil }
+        return [
+            "2026-09-02T10:00:00Z starting up",
+            "2026-09-02T10:00:01Z listening on 8080",
+            "2026-09-02T10:00:02Z ERROR failed to connect to db",
+            "2026-09-02T10:00:03Z retrying",
+        ].joined(separator: "\n")
+    }
+
     func runConsole(containerName: String, command: String) async -> ConsoleEntry? {
         guard fixtures[containerName] != nil else { return nil }
         return ConsoleEntry(command: command, output: "ran: \(command)")

@@ -43,6 +43,11 @@ public struct DaemonContainerService: ContainerService {
         return LogStreamService.lines(for: container.id, cli: cli)
     }
 
+    public func logHistory(containerName: String, tail: Int, since: String?) async -> String? {
+        guard let container = await container(named: containerName) else { return nil }
+        return await LogStreamService.history(for: container.id, cli: cli, tail: tail, since: since)
+    }
+
     public func runConsole(containerName: String, command: String) async -> ConsoleEntry? {
         guard let container = await container(named: containerName) else { return nil }
         switch await MinecraftRCON.detect(containerID: container.id, cli: cli) {

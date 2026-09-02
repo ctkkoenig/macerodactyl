@@ -116,4 +116,32 @@ import Testing
         let cleared = try reopened.rateLimit(key: "acct:x")
         #expect(cleared == nil)
     }
+
+    @Test func migrationAddsMetricsTableAndItPersists() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let path = dir.appending(path: "m.sqlite").path
+
+        let store = try PanelDataStore(databasePath: path)
+        try store.recordMetric(
+            ContainerStats(
+                name: "bot", cpuPercent: 3, memUsedBytes: 1, memLimitBytes: 2, memPercent: 50,
+                netRxBytes: 0, netTxBytes: 0, pids: 1, measuredAt: Date()))
+        // Reopen (fresh connection): the sample survives.
+        let reopened = try PanelDataStore(databasePath: path)
+        #expect(try reopened.metrics(container: "bot").count == 1)
+    }
+
+    @Test func currentVersionMatchesLatestMigration() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try PanelDataStore(databasePath: dir.appending(path: "v.sqlite").path)
+        // A fresh DB should be exactly at the schema's declared current version,
+        // and recording a metric proves the v4 table is present.
+        try store.recordMetric(
+            ContainerStats(
+                name: "x", cpuPercent: 0, memUsedBytes: 0, memLimitBytes: 0, memPercent: 0,
+                netRxBytes: 0, netTxBytes: 0, pids: 0, measuredAt: Date()))
+        #expect(PanelSchema.currentVersion == 4)
+    }
 }

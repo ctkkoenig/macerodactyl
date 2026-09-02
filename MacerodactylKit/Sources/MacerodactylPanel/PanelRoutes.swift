@@ -53,7 +53,10 @@ struct PanelRoutes {
         scoped.get(":name", use: apiContainerDetail)
         scoped.post(":name/power", use: apiPower)
         scoped.get(":name/logs", use: apiLogs)
+        scoped.get(":name/logs/search", use: apiLogsSearch)
+        scoped.get(":name/logs/download", use: apiLogsDownload)
         scoped.get(":name/stats", use: apiStatsStream)
+        scoped.get(":name/metrics", use: apiMetrics)
         scoped.post(":name/console", use: apiConsole)
         scoped.get(":name/files", use: apiFilesList)
         scoped.get(":name/files/content", use: apiFileRead)
@@ -269,6 +272,57 @@ struct PanelRoutes {
         return Self.sseResponse(payloads: stream)
     }
 
+    struct LogSearchResult: Encodable {
+        let query: String
+        let matches: [String]
+        let truncated: Bool
+    }
+
+    /// Searches recent logs for a substring (case-insensitive). Reads what docker
+    /// already retains via its log driver — no duplicate log store. `q` filters;
+    /// empty `q` returns the recent tail. `since` (e.g. "1h", "2026-09-02T10:00")
+    /// and `tail` bound the window; results are capped so the payload is bounded.
+    @Sendable func apiLogsSearch(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        let q = request.uri.queryParameters["q"].map(String.init) ?? ""
+        let since = request.uri.queryParameters["since"].map(String.init)
+        let tail = request.uri.queryParameters["tail"].flatMap { Int($0) }.map { min(max($0, 1), 20_000) } ?? 5_000
+        guard let history = await containers.logHistory(containerName: name, tail: tail, since: since) else {
+            throw notFound()
+        }
+        let needle = q.lowercased()
+        var matches = history.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if !needle.isEmpty { matches = matches.filter { $0.lowercased().contains(needle) } }
+        let cap = 2_000
+        let truncated = matches.count > cap
+        audit(
+            user: user.username, action: "container.logs", container: name, outcome: "ok",
+            ip: context.clientIP, detail: "search q=\(q) (\(matches.count) matches)")
+        return encode(LogSearchResult(query: q, matches: Array(matches.suffix(cap)), truncated: truncated))
+    }
+
+    /// Downloads the recent logs as a plain-text file (what docker retains).
+    @Sendable func apiLogsDownload(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        let tail = request.uri.queryParameters["tail"].flatMap { Int($0) }.map { min(max($0, 1), 100_000) } ?? 20_000
+        guard let history = await containers.logHistory(containerName: name, tail: tail, since: nil) else {
+            throw notFound()
+        }
+        audit(
+            user: user.username, action: "container.logs", container: name, outcome: "ok",
+            ip: context.clientIP, detail: "download logs")
+        let filename = name.replacingOccurrences(of: "\"", with: "") + "-logs.txt"
+        return Response(
+            status: .ok,
+            headers: [
+                .contentType: "text/plain; charset=utf-8",
+                .contentDisposition: "attachment; filename=\"\(filename)\"",
+            ],
+            body: .init(byteBuffer: ByteBuffer(string: history)))
+    }
+
     // MARK: Stats (snapshot + SSE)
 
     struct StatsDTO: Encodable {
@@ -294,6 +348,39 @@ struct PanelRoutes {
         let all = await containers.statsSnapshot()
         let visible = all.filter { engine.canView(containerNamed: $0.key) }
         return encode(visible.values.map(StatsDTO.init).sorted { $0.name < $1.name })
+    }
+
+    struct MetricSampleDTO: Encodable {
+        let measuredAt: String
+        let cpuPercent, memUsedBytes, memLimitBytes, memPercent, netRxBytes, netTxBytes: Double
+        let pids: Int
+        init(_ s: ContainerStats) {
+            measuredAt = Self.iso.string(from: s.measuredAt)
+            cpuPercent = s.cpuPercent
+            memUsedBytes = s.memUsedBytes
+            memLimitBytes = s.memLimitBytes
+            memPercent = s.memPercent
+            netRxBytes = s.netRxBytes
+            netTxBytes = s.netTxBytes
+            pids = s.pids
+        }
+        nonisolated(unsafe) static let iso: ISO8601DateFormatter = {
+            let f = ISO8601DateFormatter()
+            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return f
+        }()
+    }
+
+    /// Retained metric history for a container (gated on view — reading stats
+    /// history needs no more than seeing the container). `?since=` is seconds of
+    /// look-back; default the last hour, capped so the payload stays bounded.
+    @Sendable func apiMetrics(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let name = try context.parameters.require("name")
+        let lookback = request.uri.queryParameters["since"].flatMap { Double($0) } ?? 3_600
+        let clamped = min(max(lookback, 0), 7 * 24 * 3_600)  // never more than a week
+        let since = Date().addingTimeInterval(-clamped)
+        let samples = (try? store.metrics(container: name, since: since)) ?? []
+        return encode(samples.map(MetricSampleDTO.init))
     }
 
     @Sendable func apiStatsStream(_ request: Request, context: PanelRequestContext) async throws -> Response {

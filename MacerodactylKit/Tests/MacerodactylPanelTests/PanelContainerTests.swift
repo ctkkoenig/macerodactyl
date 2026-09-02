@@ -318,6 +318,87 @@ import Testing
         #expect(try String(contentsOf: secret, encoding: .utf8) == "TOP SECRET")
     }
 
+    // MARK: Log search + download (T2.4)
+
+    @Test func logSearchFiltersAndDownloadReturnsAttachment() async throws {
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            // Search for ERROR → only the matching line.
+            try await client.execute(uri: "/api/containers/bot/logs/search?q=ERROR", method: .get, headers: headers(token)) {
+                response in
+                #expect(response.status == .ok)
+                let obj = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                let matches = obj["matches"] as! [String]
+                #expect(matches.count == 1)
+                #expect(matches[0].contains("ERROR failed to connect"))
+                #expect(obj["truncated"] as? Bool == false)
+            }
+            // Empty query → the recent tail (all lines).
+            try await client.execute(uri: "/api/containers/bot/logs/search", method: .get, headers: headers(token)) {
+                response in
+                let obj = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                #expect((obj["matches"] as! [String]).count == 4)
+            }
+            // Download → text/plain attachment with the full log.
+            try await client.execute(uri: "/api/containers/bot/logs/download", method: .get, headers: headers(token)) {
+                response in
+                #expect(response.status == .ok)
+                #expect(response.headers[.contentDisposition]?.contains("attachment") == true)
+                #expect(response.headers[.contentDisposition]?.contains("bot-logs.txt") == true)
+                #expect(String(buffer: response.body).contains("listening on 8080"))
+            }
+        }
+    }
+
+    @Test func logSearchHiddenForUngrantedContainer() async throws {
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            try await client.execute(uri: "/api/containers/secret/logs/search?q=x", method: .get, headers: headers(token)) {
+                #expect($0.status == .notFound)
+            }
+        }
+    }
+
+    // MARK: Retained metrics endpoint (T2.4)
+
+    @Test func metricsHistoryReturnsRetainedSamplesForViewableContainer() async throws {
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        // Seed a couple of retained samples directly in the store.
+        let now = Date()
+        try harness.store.recordMetric(
+            ContainerStats(
+                name: "bot", cpuPercent: 5, memUsedBytes: 1, memLimitBytes: 2, memPercent: 50,
+                netRxBytes: 0, netTxBytes: 0, pids: 1, measuredAt: now.addingTimeInterval(-120)))
+        try harness.store.recordMetric(
+            ContainerStats(
+                name: "bot", cpuPercent: 7, memUsedBytes: 1, memLimitBytes: 2, memPercent: 50,
+                netRxBytes: 0, netTxBytes: 0, pids: 1, measuredAt: now.addingTimeInterval(-10)))
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            try await client.execute(uri: "/api/containers/bot/metrics?since=3600", method: .get, headers: headers(token)) {
+                response in
+                #expect(response.status == .ok)
+                let arr = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [[String: Any]]
+                #expect(arr.count == 2)
+                #expect((arr.first?["cpuPercent"] as? Double) == 5)  // oldest first
+                #expect(arr.first?["measuredAt"] is String)
+            }
+        }
+    }
+
+    @Test func metricsHistoryHiddenForUngrantedContainer() async throws {
+        // scoped is NOT granted "secret" → metrics history is a 404 like everything else.
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            try await client.execute(uri: "/api/containers/secret/metrics", method: .get, headers: headers(token)) {
+                #expect($0.status == .notFound)
+            }
+        }
+    }
+
     // MARK: Permission mapping is position-based, not substring-based
 
     @Test func requiredPermissionMapsByRoutePositionNotSubstring() {
