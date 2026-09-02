@@ -58,8 +58,8 @@ Explore → Plan (record fork+choice) → Build → Verify (tests + REAL process
 - [x] T4.1 Ship the server on Linux (headless). Verify it ACTUALLY builds+runs for Linux (SwiftPM Linux build; the app target excluded). AC: `swift build` for the server product on Linux (via docker swift image) succeeds; server runs and serves; a Docker image of the panel.
 
 ### Tier 5 — the shopfront
-- [ ] T5.1 README (real screenshots I captured), LICENSE, CONTRIBUTING, SECURITY, issue/PR templates, build-from-source w/ personal-team signing. AC: all present; README shows real screenshots; no notarization promised (no paid account).
-- [ ] T5.2 Homebrew cask + release workflow PREPARED, not published. AC: files exist, documented as manual-flip; distribution designed around no-notarization.
+- [x] T5.1 README (real screenshots I captured), LICENSE, CONTRIBUTING, SECURITY, issue/PR templates, build-from-source w/ personal-team signing. AC: all present; README shows real screenshots; no notarization promised (no paid account).
+- [x] T5.2 Homebrew cask + release workflow PREPARED, not published. AC: files exist, documented as manual-flip; distribution designed around no-notarization.
 
 ### Tier 6 — harden untested
 - [ ] T6.1 XCUITest for views. AC: at least a smoke UI test that launches and asserts key screens (may be limited by headless CI; record).
