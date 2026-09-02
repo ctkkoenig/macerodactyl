@@ -67,8 +67,13 @@ jobs:
         run: docker build -t macerodactyl-panel:ci .
       - name: Run the panel and curl /healthz
         run: |
+          # bindLAN:true so the daemon binds 0.0.0.0 inside the container and is
+          # reachable through the port map (default is localhost-only).
+          mkdir -p "$PWD/ci-data"
+          echo '{"port":27180,"bindLAN":true,"stacksRoot":"/srv/stacks","dockerPathOverride":null,"tlsEnabled":false}' > "$PWD/ci-data/config.json"
           docker run -d --name mac-ci -p 27180:27180 \
             -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/ci-data":/root/.local/share/Macerodactyl \
             -e HOME=/root macerodactyl-panel:ci
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:27180/healthz; then echo "  <- panel is up"; ok=1; break; fi
