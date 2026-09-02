@@ -10,6 +10,7 @@ struct ScheduleSection: View {
     @State private var service: ScheduleService?
     @State private var schedule: RestartSchedule?
     @State private var lastResult: ScheduleRunResult?
+    @State private var health: ScheduleService.AgentHealth?
     @State private var errorMessage: String?
     @State private var showingEditor = false
 
@@ -44,6 +45,7 @@ struct ScheduleSection: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Restarts \(schedule.timeDescription)")
                     lastRunLine
+                    healthLine
                 }
                 Spacer()
                 Button("Edit") { showingEditor = true }
@@ -82,6 +84,22 @@ struct ScheduleSection: View {
         }
     }
 
+    @ViewBuilder
+    private var healthLine: some View {
+        switch health {
+        case .binaryMissing(let installed):
+            Text("BROKEN: points at \(installed), which no longer exists — scheduled restarts fail to launch and produce no log. Edit and save to rewrite it with the current docker path.")
+                .font(.caption)
+                .foregroundStyle(.red)
+        case .binaryOutdated(let installed, let current):
+            Text("Written for \(installed); docker is now \(current). Edit and save to update the agent.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        case .ok, nil:
+            EmptyView()
+        }
+    }
+
     private func reload() {
         errorMessage = nil
         guard let cli = store.cli else {
@@ -93,6 +111,7 @@ struct ScheduleSection: View {
             self.service = service
             schedule = service.schedule(forContainerName: container.name)
             lastResult = schedule.flatMap { service.lastResult(for: $0) }
+            health = schedule != nil ? service.health(forContainerName: container.name) : nil
         } catch {
             errorMessage = "Schedules unavailable: \(error.localizedDescription)"
         }

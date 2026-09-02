@@ -116,6 +116,13 @@ public struct ScheduleService: Sendable {
     /// Writes the plist and loads the agent. An existing agent for the same
     /// container is booted out first so edits replace rather than duplicate.
     public func install(_ schedule: RestartSchedule) throws {
+        // launchd will NOT create the log parent directory, and a missing one
+        // makes the job fail to spawn — guarantee it exists before loading.
+        do {
+            try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+        } catch {
+            throw ScheduleError.io("couldn't create log directory: \(error.localizedDescription)")
+        }
         let path = plistPath(for: schedule)
         if FileManager.default.fileExists(atPath: path.path) {
             try? launchctl("bootout", "gui/\(getuid())/\(schedule.label)")
@@ -188,6 +195,42 @@ public struct ScheduleService: Sendable {
             )
         }
         return nil
+    }
+
+    // MARK: Agent health (stale or missing binary)
+
+    /// The docker path baked into an installed agent's plist. The path is
+    /// resolved at write time, so an agent written under Docker Desktop keeps
+    /// /usr/local/bin/docker even after a move to OrbStack — health() makes
+    /// that visible instead of letting the schedule quietly fire into nothing.
+    public func installedDockerPath(forContainerName name: String) -> String? {
+        let schedule = RestartSchedule(containerName: name, hour: 0, minute: 0)
+        guard let data = try? Data(contentsOf: plistPath(for: schedule)),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let arguments = plist["ProgramArguments"] as? [String],
+              let first = arguments.first else { return nil }
+        return first
+    }
+
+    public enum AgentHealth: Sendable, Equatable {
+        case ok
+        /// The binary the agent points at no longer exists — the scheduled
+        /// job will fail to spawn (producing no log output at all).
+        case binaryMissing(installed: String)
+        /// The binary exists but differs from the currently resolved docker —
+        /// e.g. the plist predates a Docker Desktop → OrbStack move.
+        case binaryOutdated(installed: String, current: String)
+    }
+
+    public func health(forContainerName name: String) -> AgentHealth? {
+        guard let installed = installedDockerPath(forContainerName: name) else { return nil }
+        if !FileManager.default.isExecutableFile(atPath: installed) {
+            return .binaryMissing(installed: installed)
+        }
+        if installed != dockerPath {
+            return .binaryOutdated(installed: installed, current: dockerPath)
+        }
+        return .ok
     }
 
     // MARK: Run results (failure surfacing)

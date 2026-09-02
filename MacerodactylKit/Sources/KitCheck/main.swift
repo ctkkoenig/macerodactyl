@@ -173,6 +173,38 @@ case "schedule-preview":
     print(String(repeating: "-", count: 60))
     print(try service.plistXML(for: schedule))
 
+case "schedule-install":
+    guard arguments.count == 5, let hour = Int(arguments[3]), let minute = Int(arguments[4]) else {
+        print("usage: kitcheck schedule-install NAME HH MM")
+        exit(64)
+    }
+    let service = try ScheduleService(dockerPath: binary.path)
+    let schedule = RestartSchedule(containerName: arguments[2], hour: hour, minute: minute)
+    try service.install(schedule)
+    print("installed \(schedule.label) (\(schedule.timeDescription))")
+
+case "schedule-status":
+    guard arguments.count == 3 else { print("usage: kitcheck schedule-status NAME"); exit(64) }
+    let service = try ScheduleService(dockerPath: binary.path)
+    guard let schedule = service.schedule(forContainerName: arguments[2]) else {
+        print("no schedule for \(arguments[2])")
+        exit(0)
+    }
+    print("schedule: \(schedule.timeDescription)")
+    print("installed docker path: \(service.installedDockerPath(forContainerName: arguments[2]) ?? "?")")
+    print("health: \(service.health(forContainerName: arguments[2]).map(String.init(describing:)) ?? "?")")
+    if let result = service.lastResult(for: schedule) {
+        print("last run: \(result.date.formatted()) \(result.success ? "OK" : "FAILED") — \(result.message)")
+    } else {
+        print("last run: never")
+    }
+
+case "schedule-remove":
+    guard arguments.count == 3 else { print("usage: kitcheck schedule-remove NAME"); exit(64) }
+    let service = try ScheduleService(dockerPath: binary.path)
+    try service.remove(containerName: arguments[2])
+    print("removed schedule for \(arguments[2])")
+
 case nil:
     await listContainers()
 

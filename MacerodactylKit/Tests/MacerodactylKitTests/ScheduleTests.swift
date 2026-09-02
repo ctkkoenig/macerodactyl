@@ -87,6 +87,50 @@ import Testing
         #expect(!schedule.label.contains("/"))
     }
 
+    @Test func healthFlagsMissingAndOutdatedBinaries() throws {
+        let (service, cleanup) = try makeService()
+        defer { cleanup() }
+        let schedule = RestartSchedule(containerName: "bot", hour: 2, minute: 0)
+        try service.install(schedule)
+
+        // The plist bakes the path that was resolved at write time…
+        #expect(service.installedDockerPath(forContainerName: "bot") == "/fake/resolved/bin/docker")
+        // …and that fake path isn't executable, so health reports BROKEN.
+        #expect(service.health(forContainerName: "bot") == .binaryMissing(installed: "/fake/resolved/bin/docker"))
+
+        // A real executable that differs from the current one → outdated.
+        let realBinary = FileManager.default.temporaryDirectory.appending(path: "docker-\(UUID().uuidString)")
+        try Data("#!/bin/sh\n".utf8).write(to: realBinary)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: realBinary.path)
+        defer { try? FileManager.default.removeItem(at: realBinary) }
+        let moved = ScheduleService(
+            dockerPath: realBinary.path,
+            launchAgentsDirectory: service.launchAgentsDirectory,
+            logsDirectory: service.logsDirectory, managesLaunchd: false
+        )
+        // Reinstalling under the new resolution rewrites the agent…
+        try moved.install(schedule)
+        #expect(moved.health(forContainerName: "bot") == .ok)
+        // …and a service resolving elsewhere sees it as outdated.
+        let elsewhere = ScheduleService(
+            dockerPath: "/somewhere/else/docker",
+            launchAgentsDirectory: service.launchAgentsDirectory,
+            logsDirectory: service.logsDirectory, managesLaunchd: false
+        )
+        #expect(elsewhere.health(forContainerName: "bot")
+            == .binaryOutdated(installed: realBinary.path, current: "/somewhere/else/docker"))
+    }
+
+    @Test func installRecreatesDeletedLogDirectory() throws {
+        let (service, cleanup) = try makeService()
+        defer { cleanup() }
+        try FileManager.default.removeItem(at: service.logsDirectory)
+        try service.install(RestartSchedule(containerName: "bot", hour: 1, minute: 0))
+        var isDir: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: service.logsDirectory.path, isDirectory: &isDir))
+        #expect(isDir.boolValue)
+    }
+
     @Test func lastResultReadsFailureFromNewerStderr() throws {
         let (service, cleanup) = try makeService()
         defer { cleanup() }
