@@ -25,6 +25,9 @@ public protocol ContainerService: Sendable {
     func fileService(containerName: String) async -> FileService?
     /// Live stats snapshot for all containers (for the landing).
     func statsSnapshot() async -> [String: ContainerStats]
+    /// Configured resource limits per container (from `docker inspect`; static-
+    /// ish, so callers fetch on load rather than every poll). Keyed by name.
+    func limits() async -> [String: ContainerLimits]
     /// Live stats stream for one container (for the focused view).
     func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>?
     /// The current schedule for a container, if any, plus its last run.
@@ -134,6 +137,12 @@ public struct LiveContainerService: ContainerService {
     public func statsSnapshot() async -> [String: ContainerStats] {
         guard let cli = await MainActor.run(body: { store.cli }) else { return [:] }
         return (try? await cli.statsSnapshot()) ?? [:]
+    }
+
+    public func limits() async -> [String: ContainerLimits] {
+        guard let cli = await MainActor.run(body: { store.cli }) else { return [:] }
+        let ids = await allContainers().map(\.id)
+        return await cli.containerLimits(ids: ids)
     }
 
     public func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>? {

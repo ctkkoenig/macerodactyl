@@ -60,6 +60,11 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
     // Stats + schedules for the container-feature tests.
     private(set) var scheduleCalls: [(op: String, name: String)] = []
 
+    var cannedLimits: [String: ContainerLimits] = [
+        "bot": ContainerLimits(memoryBytes: 512 * 1024 * 1024, cpuCores: 2)  // "secret" left unlimited
+    ]
+    func limits() async -> [String: ContainerLimits] { cannedLimits }
+
     func statsSnapshot() async -> [String: ContainerStats] {
         var out: [String: ContainerStats] = [:]
         for (name, fixture) in fixtures where fixture.container.isRunning {

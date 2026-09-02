@@ -366,10 +366,14 @@ struct PanelRoutes {
     }
 
     struct ContainerSummary: Encodable {
-        let name, image, status, state: String
+        let name, image, status, state, ports: String
         let running: Bool
         let health: String?
         let stack: String?
+        /// Configured limits — null means Unlimited (the UI shows that verbatim,
+        /// never a fabricated ceiling).
+        let memoryLimitBytes: Int64?
+        let cpuCores: Double?
     }
 
     @Sendable func apiContainers(_ request: Request, context: PanelRequestContext) async throws -> Response {
@@ -377,11 +381,13 @@ struct PanelRoutes {
         let engine = try store.authorizationEngine(for: user)
         // The list is filtered to what the caller may view — nothing else.
         let visible = engine.visible(await containers.allContainers())
+        let limits = await containers.limits()  // one docker inspect, on load
         let summaries = visible.map { container in
             ContainerSummary(
                 name: container.name, image: container.image, status: container.status,
-                state: container.state.rawValue, running: container.isRunning,
-                health: container.health?.rawValue, stack: container.composeProject
+                state: container.state.rawValue, ports: container.ports, running: container.isRunning,
+                health: container.health?.rawValue, stack: container.composeProject,
+                memoryLimitBytes: limits[container.name]?.memoryBytes, cpuCores: limits[container.name]?.cpuCores
             )
         }
         return encode(summaries)
@@ -394,6 +400,8 @@ struct PanelRoutes {
         let stack: String?
         let permissions: Permissions
         let filesAvailable: Bool
+        let memoryLimitBytes: Int64?
+        let cpuCores: Double?
         struct Permissions: Encodable { let view, power, files, console, schedules, lifecycle: Bool }
     }
 
@@ -403,6 +411,7 @@ struct PanelRoutes {
         let name = try context.parameters.require("name")
         guard let container = await containers.container(named: name) else { throw notFound() }
         let engine = try store.authorizationEngine(for: user)
+        let limit = await containers.limits()[name]
         audit(user: user.username, action: "container.view", container: name, outcome: "ok", ip: context.clientIP)
         return encode(
             ContainerDetail(
@@ -414,7 +423,8 @@ struct PanelRoutes {
                     files: engine.can(.files, containerNamed: name), console: engine.can(.console, containerNamed: name),
                     schedules: engine.can(.schedules, containerNamed: name), lifecycle: engine.can(.lifecycle, containerNamed: name)
                 ),
-                filesAvailable: await containers.fileService(containerName: name) != nil
+                filesAvailable: await containers.fileService(containerName: name) != nil,
+                memoryLimitBytes: limit?.memoryBytes, cpuCores: limit?.cpuCores
             ))
     }
 

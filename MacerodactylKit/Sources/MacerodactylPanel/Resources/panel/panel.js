@@ -146,36 +146,55 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pagehide', () => { closeStreams(); stopLanding(); });
 
-// --- landing ----------------------------------------------------------------
+// --- landing (Pterodactyl-style server list) --------------------------------
 let isHome = true;
+let rowLimits = {};  // name -> {mem, cpu} for the "of X"/hot calc on each poll
+function cores(n) { return n === 1 ? '1 core' : (Number.isInteger(n) ? n + ' cores' : n.toFixed(1) + ' cores'); }
+function firstAddr(ports) {
+  // "0.0.0.0:27980->80/tcp, ..." — surface the first host mapping compactly.
+  const m = (ports || '').match(/(?:0\.0\.0\.0:|:::|127\.0\.0\.1:)?(\d+)->/);
+  return m ? (':' + m[1]) : '';
+}
 async function showHome() {
-  closeStreams(); current = null; detail = null; isHome = true;
-  titleEl.textContent = 'Containers'; backBtn.hidden = true; tabbar.hidden = true;
+  closeStreams(); current = null; detail = null; isHome = true; document.body.classList.remove('detail');
+  titleEl.replaceChildren(document.createTextNode('Macerodactyl')); backBtn.hidden = true; tabbar.hidden = true;
   let list;
   try { list = await jget('/api/containers'); } catch (e) { show(msg('Could not load containers.', true)); return; }
   if (!list.length) { show(msg('No containers you can access.')); return; }
+  rowLimits = {};
+  list.forEach(c => rowLimits[c.name] = { mem: c.memoryLimitBytes, cpu: c.cpuCores });
   const byStack = {}, loose = [];
   list.forEach(c => { if (c.stack) (byStack[c.stack] = byStack[c.stack] || []).push(c); else loose.push(c); });
   const nodes = [];
-  Object.keys(byStack).sort().forEach(s => { nodes.push(h('h2', { text: s }), cards(byStack[s])); });
-  if (loose.length) nodes.push(h('h2', { text: 'Unmanaged' }), cards(loose));
+  Object.keys(byStack).sort().forEach(s => { nodes.push(h('h2', { class: 'section', text: s }), serverList(byStack[s])); });
+  if (loose.length) nodes.push(h('h2', { class: 'section', text: 'Unmanaged' }), serverList(loose));
   if (me.isAdmin) nodes.push(maintenanceCard());
   show(nodes);
   startLanding();
 }
-function cards(cs) {
-  return h('div', { class: 'clist' }, cs.map(c => {
-    const cls = !c.running ? 'down' : (c.health === 'unhealthy' || c.health === 'starting' ? 'warn' : 'up');
-    const addr = c.state === 'running' ? c.image : c.status;
-    return h('button', { class: 'citem', onclick: () => enter(c.name) },
-      h('span', { class: 'dot ' + cls }),
-      h('span', { class: 'meta' }, h('div', { class: 'nm', text: c.name }), h('div', { class: 'st', text: addr })),
-      h('span', { class: 'use', 'data-c': c.name, text: c.running ? '…' : '—' }));
-  }));
+function serverList(cs) { return h('div', { class: 'serverlist' }, cs.map(serverRow)); }
+function serverRow(c) {
+  const cls = !c.running ? 'down' : (c.health === 'unhealthy' || c.health === 'starting' ? 'warn' : 'up');
+  const memLim = c.memoryLimitBytes ? 'of ' + bytes(c.memoryLimitBytes) : 'Unlimited';
+  const cpuLim = c.cpuCores != null ? 'of ' + cores(c.cpuCores) : 'Unlimited';
+  const addr = c.running ? firstAddr(c.ports) : '';
+  return h('button', { class: 'server ' + cls, onclick: () => enter(c.name) },
+    h('span', { class: 'avatar', text: /mc|minecraft/i.test(c.name) ? '🎮' : '🐳' }),
+    h('span', { class: 'ident' }, h('div', { class: 'nm', text: c.name }), h('div', { class: 'desc', text: c.image })),
+    addr ? h('span', { class: 'addr' }, h('span', { class: 'ai', text: '🔗' }), addr) : h('span', { class: 'addr' }),
+    h('span', { class: 'sgroups' },
+      statGroup(c.name, 'cpu', '◔', c.running ? '…' : '—', cpuLim),
+      statGroup(c.name, 'mem', '▤', c.running ? '…' : '—', memLim)),
+    h('span', { class: 'edge' }));
+}
+function statGroup(name, kind, icon, value, limit) {
+  return h('span', { class: 'sg', 'data-sg': name + ':' + kind },
+    h('span', { class: 'ic', text: icon }),
+    h('span', {}, h('div', { class: 'v', 'data-c': name, 'data-stat': kind, text: value }), h('div', { class: 'lim', text: limit })));
 }
 function maintenanceCard() {
   return h('div', {},
-    h('h2', { text: 'Maintenance (admin)' }),
+    h('h2', { class: 'section', text: 'Maintenance (admin)' }),
     h('div', { class: 'filebar' },
       h('button', { text: 'Disk usage', onclick: showDisk }),
       h('button', { text: 'Prune dangling images', onclick: pruneImages })));
@@ -196,9 +215,20 @@ function startLanding() { stopLanding(); pollStats(); landingTimer = setInterval
 async function pollStats() {
   let stats; try { stats = await jget('/api/stats'); } catch (e) { return; }
   const map = {}; stats.forEach(s => map[s.name] = s);
-  document.querySelectorAll('.use[data-c]').forEach(el => {
-    const s = map[el.getAttribute('data-c')];
-    el.textContent = s ? (s.cpuPercent.toFixed(1) + '%  ' + bytes(s.memUsedBytes)) : '—';
+  document.querySelectorAll('.v[data-c][data-stat]').forEach(el => {
+    const name = el.getAttribute('data-c'), kind = el.getAttribute('data-stat'), s = map[name];
+    const lim = rowLimits[name] || {};
+    let hot = false;
+    if (!s) { el.textContent = '—'; }
+    else if (kind === 'cpu') {
+      el.textContent = s.cpuPercent.toFixed(1) + '%';
+      if (lim.cpu != null) hot = s.cpuPercent / (lim.cpu * 100) > 0.9;
+    } else if (kind === 'mem') {
+      el.textContent = bytes(s.memUsedBytes);
+      if (lim.mem) hot = s.memUsedBytes / lim.mem > 0.9;
+    }
+    const sg = document.querySelector('.sg[data-sg="' + name + ':' + kind + '"]');
+    if (sg) sg.classList.toggle('hot', hot);
   });
 }
 
@@ -206,7 +236,9 @@ async function pollStats() {
 window.enter = async function (name) {
   stopLanding();
   try { detail = await jget('/api/containers/' + enc(name)); } catch (e) { show(msg('Unavailable.', true)); return; }
-  current = name; isHome = false; titleEl.textContent = name; backBtn.hidden = false;
+  current = name; isHome = false; document.body.classList.add('detail');
+  titleEl.replaceChildren(document.createTextNode(name)); backBtn.hidden = false;
+  // Only build nav items for features that exist — never a tab that leads nowhere.
   const p = detail.permissions, tabs = [];
   if (p.console) tabs.push(['console', 'Console', '⌘']);
   tabs.push(['overview', 'Overview', 'ⓘ']);
@@ -214,8 +246,8 @@ window.enter = async function (name) {
   if (p.files && detail.filesAvailable) tabs.push(['files', 'Files', '▤']);
   if (p.schedules) tabs.push(['schedules', 'Schedules', '⏱']);
   tabbar.hidden = false;
-  tabbar.replaceChildren(...tabs.map(t => h('button', { 'data-t': t[0], onclick: () => setTab(t[0]) },
-    h('span', { class: 'ic', text: t[2] }), t[1])));
+  tabbar.replaceChildren(...tabs.map(t => h('button', { class: 'navitem', 'data-t': t[0], onclick: () => setTab(t[0]) },
+    h('span', { class: 'tile', text: t[2] }), h('span', { class: 'lbl', text: t[1] }))));
   tab = p.console ? 'console' : 'overview';
   openContainerStreams();
   render();
@@ -230,30 +262,57 @@ let lastStats = null;
 function paintStats(s) {
   lastStats = s.unavailable ? null : s;
   const old = document.getElementById('statstrip');
-  if (old) old.replaceWith(statStrip());
+  if (old) old.replaceWith(statCards());
 }
-function statStrip() {
-  const s = lastStats;
-  const cell = (cls, k, v, sub) => h('div', { class: 'stat ' + cls + (v == null ? ' na' : '') },
-    h('div', { class: 'k', text: k }), h('div', { class: 'v', text: v == null ? '—' : v }),
-    sub ? h('div', { class: 's', text: sub }) : null);
-  return h('div', { class: 'stats', id: 'statstrip' },
-    cell('cpu', 'CPU', s ? s.cpuPercent.toFixed(1) + '%' : null),
-    cell('mem', 'Memory', s ? bytes(s.memUsedBytes) : null, s ? 'of ' + bytes(s.memLimitBytes) : ''),
-    cell('net', 'Network', s ? '↓ ' + bytes(s.netRxBytes) : null, s ? '↑ ' + bytes(s.netTxBytes) : ''),
-    cell('up', 'PIDs', s ? String(s.pids) : null));
+// The stat column (screenshot 2): icon tile, label, and value with the limit
+// after a slash. Limits are the container's REAL configured limits, or
+// "Unlimited" — never the host total. The icon turns red near a real limit.
+function statCards() {
+  const s = lastStats, d = detail;
+  const memHot = !!(s && d.memoryLimitBytes && s.memUsedBytes / d.memoryLimitBytes > 0.9);
+  const cpuHot = !!(s && d.cpuCores != null && s.cpuPercent / (d.cpuCores * 100) > 0.9);
+  const card = (cls, ic, k, main, lim, hot) => h('div', { class: 'statcard ' + cls + (main == null ? ' na' : '') + (hot ? ' hot' : '') },
+    h('span', { class: 'ic', text: ic }),
+    h('div', { class: 'body' }, h('div', { class: 'k', text: k }),
+      h('div', { class: 'v' }, main == null ? '—' : main, (main != null && lim) ? h('span', { class: 'lim', text: ' / ' + lim }) : null)));
+  return h('div', { class: 'statcol', id: 'statstrip' },
+    card('cpu', '◔', 'CPU', s ? s.cpuPercent.toFixed(1) + '%' : null, d.cpuCores != null ? cores(d.cpuCores) : 'Unlimited', cpuHot),
+    card('mem', '▤', 'Memory', s ? bytes(s.memUsedBytes) : null, d.memoryLimitBytes ? bytes(d.memoryLimitBytes) : 'Unlimited', memHot),
+    card('net', '⇅', 'Network', s ? ('↓ ' + bytes(s.netRxBytes) + '   ↑ ' + bytes(s.netTxBytes)) : null, null),
+    card('pids', '◈', 'Processes', s ? String(s.pids) : null, null));
+}
+
+function wsHead() {
+  return h('div', { class: 'wshead' },
+    h('div', { class: 'h' },
+      h('h1', { text: current }),
+      h('div', { class: 'desc', text: detail.image + (detail.stack ? '  ·  ' + detail.stack : '') })),
+    powerRow());
+}
+function metaRows() {
+  const d = detail, kv = (k, v) => h('div', { class: 'kv' }, h('span', { class: 'kk', text: k }), h('span', { class: 'vv', text: v }));
+  const rows = [kv('Status', d.status), kv('Image', d.image)];
+  if (d.ports) rows.push(kv('Ports', d.ports));
+  if (d.stack) rows.push(kv('Stack', d.stack));
+  return h('div', {}, rows);
 }
 
 window.setTab = function (t) { if (logSrc) { logSrc.close(); logSrc = null; } tab = t; render(); };
 function render() {
-  tabbar.querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.getAttribute('data-t') === tab));
-  const body = [statStrip()];
-  if (tab === 'console') body.push(...consoleTab());
-  else if (tab === 'overview') body.push(...overviewTab());
-  else if (tab === 'logs') body.push(...logsTab());
-  else if (tab === 'files') body.push(h('div', { id: 'files' }));
-  else if (tab === 'schedules') body.push(h('div', { id: 'sched' }, 'Loading…'));
-  show(body);
+  tabbar.querySelectorAll('.navitem').forEach(b => b.classList.toggle('sel', b.getAttribute('data-t') === tab));
+  const parts = [wsHead()];
+  if (tab === 'console') {
+    const main = h('div', {}, lifecycleRow(), h('div', { class: 'term', id: 'cterm' }), quickRow(), inputBar());
+    parts.push(h('div', { class: 'consolelayout' }, main, statCards()));
+  } else if (tab === 'overview') {
+    const main = h('div', {},
+      h('div', { class: 'sparkwrap' }, h('div', { class: 'lbl', text: 'CPU — last hour' }), h('div', { id: 'spark' })),
+      metaRows(), lifecycleRow());
+    parts.push(h('div', { class: 'consolelayout' }, main, statCards()));
+  } else if (tab === 'logs') { parts.push(...logsTab()); }
+  else if (tab === 'files') { parts.push(h('div', { id: 'files' })); }
+  else if (tab === 'schedules') { parts.push(h('div', { id: 'sched' }, 'Loading…')); }
+  show(parts);
   if (tab === 'logs') startLogs();
   if (tab === 'console') bindConsole();
   if (tab === 'overview') loadSparkline();
@@ -284,7 +343,7 @@ function lifecycleRow() {
 async function lifecycleStream(path, prompt) {
   if (!confirm(prompt)) return;
   const term = h('div', { class: 'term' });
-  show(statStrip(), lifecycleRow(), term);
+  show(wsHead(), lifecycleRow(), term);
   try {
     const r = await fetch(api(path), { method: 'POST', headers: CSRF });
     if (!r.ok || !r.body) { const j = await r.json().catch(() => ({})); term.append(j.error || ('Failed (' + r.status + ')') + '\n'); return; }
@@ -314,17 +373,17 @@ async function doPower(a) {
   const r = await fetch(api('/power'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ action: a }) });
   detail = await jget('/api/containers/' + enc(current)); openContainerStreams(); render(); if (!r.ok) alert('Action failed');
 }
-function consoleTab() {
+function quickRow() {
   const mc = /mc|minecraft/i.test(current);
   const quick = mc ? ['list', 'say hi', 'time set day'] : ['ls', 'ls -la', 'cat ', 'tail -n 50 ', '|'];
-  const term = h('div', { class: 'term', id: 'cterm' });
-  return [
-    powerRow(), lifecycleRow(), term,
-    h('div', { class: 'quick' }, quick.map(q => h('button', { onclick: () => qk(q), text: q }))),
-    h('div', { class: 'inputbar' },
-      h('input', { id: 'cin', placeholder: mc ? 'server command' : 'shell command', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' }),
-      h('button', { onclick: runCmd }, 'Send'))
-  ];
+  return h('div', { class: 'quick' }, quick.map(q => h('button', { onclick: () => qk(q), text: q })));
+}
+function inputBar() {
+  const mc = /mc|minecraft/i.test(current);
+  return h('div', { class: 'inputbar' },
+    h('span', { class: 'chev', text: '›' }),
+    h('input', { id: 'cin', placeholder: mc ? 'server command' : 'shell command', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' }),
+    h('button', { onclick: runCmd }, 'Send'));
 }
 let history = [];
 function bindConsole() {
@@ -382,14 +441,6 @@ async function searchLogs(q) {
 function downloadLogs() { window.open(api('/logs/download'), '_blank'); }
 
 // --- overview + metrics sparkline -------------------------------------------
-function overviewTab() {
-  const d = detail;
-  const kv = (k, v) => h('div', { class: 'kv' }, h('span', { class: 'kk', text: k }), h('span', { class: 'vv', text: v }));
-  const rows = [kv('Status', d.status), kv('Image', d.image)];
-  if (d.ports) rows.push(kv('Ports', d.ports));
-  if (d.stack) rows.push(kv('Stack', d.stack));
-  return [h('div', { class: 'sparkwrap' }, h('div', { class: 'lbl', text: 'CPU — last hour' }), h('div', { id: 'spark' })), ...rows, lifecycleRow()];
-}
 async function loadSparkline() {
   const host = document.getElementById('spark'); if (!host) return;
   let samples; try { samples = await jget(api('/metrics') + '?since=3600'); } catch (e) { host.replaceChildren(document.createTextNode('—')); return; }
