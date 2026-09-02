@@ -203,6 +203,140 @@ import Testing
         #expect(try String(contentsOf: secret, encoding: .utf8) == "TOP SECRET")
     }
 
+    // MARK: File manager mutations over HTTP (T2.3)
+
+    @Test func fileManagerMutationsRoundTripOverHTTP() async throws {
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, files: true))
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+
+            // mkdir
+            try await client.execute(
+                uri: "/api/containers/bot/files/dir", method: .post,
+                headers: headers(token, csrf: true, json: true),
+                body: ByteBuffer(string: #"{"path":"mods"}"#)
+            ) { #expect($0.status == .ok) }
+            var isDir: ObjCBool = false
+            #expect(
+                FileManager.default.fileExists(
+                    atPath: harness.botStackRoot.appending(path: "mods").path, isDirectory: &isDir) && isDir.boolValue)
+
+            // upload binary bytes
+            let bytes = ByteBuffer(bytes: [0x50, 0x4B, 0x03, 0x04, 0x00, 0xFF, 0xFE, 0x00])
+            try await client.execute(
+                uri: "/api/containers/bot/files/upload?path=mods/plugin.jar", method: .post,
+                headers: headers(token, csrf: true), body: bytes
+            ) { #expect($0.status == .ok) }
+            #expect(FileManager.default.fileExists(atPath: harness.botStackRoot.appending(path: "mods/plugin.jar").path))
+
+            // download it back — bytes must match exactly (binary-safe)
+            try await client.execute(
+                uri: "/api/containers/bot/files/download?path=mods/plugin.jar", method: .get, headers: headers(token)
+            ) { response in
+                #expect(response.status == .ok)
+                #expect(Array(buffer: response.body) == [0x50, 0x4B, 0x03, 0x04, 0x00, 0xFF, 0xFE, 0x00])
+            }
+
+            // rename
+            try await client.execute(
+                uri: "/api/containers/bot/files/move", method: .post,
+                headers: headers(token, csrf: true, json: true),
+                body: ByteBuffer(string: #"{"from":"mods/plugin.jar","to":"mods/renamed.jar"}"#)
+            ) { #expect($0.status == .ok) }
+            #expect(!FileManager.default.fileExists(atPath: harness.botStackRoot.appending(path: "mods/plugin.jar").path))
+            #expect(FileManager.default.fileExists(atPath: harness.botStackRoot.appending(path: "mods/renamed.jar").path))
+
+            // delete
+            try await client.execute(
+                uri: "/api/containers/bot/files/entry?path=mods/renamed.jar", method: .delete,
+                headers: headers(token, csrf: true)
+            ) { #expect($0.status == .ok) }
+            #expect(!FileManager.default.fileExists(atPath: harness.botStackRoot.appending(path: "mods/renamed.jar").path))
+        }
+    }
+
+    @Test func fileManagerMutationsRequireFilesPermission() async throws {
+        // view but NOT files → every mutation is 403 (visible, action forbidden).
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, files: false))
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            let calls: [(String, HTTPRequest.Method, String?)] = [
+                ("/api/containers/bot/files/dir", .post, #"{"path":"x"}"#),
+                ("/api/containers/bot/files/move", .post, #"{"from":"a","to":"b"}"#),
+                ("/api/containers/bot/files/entry?path=x", .delete, nil),
+                ("/api/containers/bot/files/upload?path=x", .post, "data"),
+                ("/api/containers/bot/files/download?path=x", .get, nil),
+            ]
+            for (uri, method, body) in calls {
+                let mutating = method != .get
+                try await client.execute(
+                    uri: uri, method: method, headers: headers(token, csrf: mutating, json: body != nil),
+                    body: body.map { ByteBuffer(string: $0) } ?? ByteBuffer()
+                ) { #expect($0.status == .forbidden, "\(uri) should be 403 without files perm") }
+            }
+        }
+    }
+
+    @Test func traversalShapesBlockedOnEveryNewFileEndpoint() async throws {
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, files: true))
+        let escapes = ["../secret-data/creds.txt", "..%2fsecret-data%2fcreds.txt", "%2e%2e/secret-data/creds.txt", "/etc/passwd"]
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            for path in escapes {
+                let q = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
+                let jsonPath = path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+                // mkdir
+                try await client.execute(
+                    uri: "/api/containers/bot/files/dir", method: .post, headers: headers(token, csrf: true, json: true),
+                    body: ByteBuffer(string: "{\"path\":\"\(jsonPath)\"}")
+                ) { #expect($0.status != .ok) }
+                // upload
+                try await client.execute(
+                    uri: "/api/containers/bot/files/upload?path=\(q)", method: .post, headers: headers(token, csrf: true),
+                    body: ByteBuffer(string: "HIJACK")
+                ) { #expect($0.status != .ok) }
+                // delete
+                try await client.execute(
+                    uri: "/api/containers/bot/files/entry?path=\(q)", method: .delete, headers: headers(token, csrf: true)
+                ) { #expect($0.status != .ok) }
+                // download must never return the secret
+                try await client.execute(
+                    uri: "/api/containers/bot/files/download?path=\(q)", method: .get, headers: headers(token)
+                ) { response in
+                    #expect(response.status != .ok)
+                    #expect(!String(buffer: response.body).contains("TOP SECRET"))
+                }
+                // move — escape at EITHER end is refused
+                try await client.execute(
+                    uri: "/api/containers/bot/files/move", method: .post, headers: headers(token, csrf: true, json: true),
+                    body: ByteBuffer(string: "{\"from\":\"docker-compose.yml\",\"to\":\"\(jsonPath)\"}")
+                ) { #expect($0.status != .ok) }
+            }
+        }
+        let secret = harness.botStackRoot.deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "secret-data/creds.txt")
+        #expect(try String(contentsOf: secret, encoding: .utf8) == "TOP SECRET")
+    }
+
+    // MARK: Permission mapping is position-based, not substring-based
+
+    @Test func requiredPermissionMapsByRoutePositionNotSubstring() {
+        typealias M = ContainerScopeMiddleware
+        // Normal cases.
+        #expect(M.requiredPermission(path: "/api/containers/bot/files/content") == .files)
+        #expect(M.requiredPermission(path: "/api/containers/bot/power") == .power)
+        #expect(M.requiredPermission(path: "/api/containers/bot/console") == .console)
+        #expect(M.requiredPermission(path: "/api/containers/bot/schedule") == .schedules)
+        #expect(M.requiredPermission(path: "/api/containers/bot/logs") == .view)
+        #expect(M.requiredPermission(path: "/api/containers/bot") == .view)
+        // The fail-open edge: a container literally named after a keyword must
+        // map by the ACTION segment, not because its name contains "/files".
+        #expect(M.requiredPermission(path: "/api/containers/files/power") == .power)
+        #expect(M.requiredPermission(path: "/api/containers/files/console") == .console)
+        #expect(M.requiredPermission(path: "/api/containers/power/files/content") == .files)
+        #expect(M.requiredPermission(path: "/api/containers/schedule/power") == .power)
+    }
+
     // MARK: The 404 provenance proof
 
     @Test func ungrantedAndNonexistentAreIndistinguishable() async throws {

@@ -58,6 +58,11 @@ struct PanelRoutes {
         scoped.get(":name/files", use: apiFilesList)
         scoped.get(":name/files/content", use: apiFileRead)
         scoped.put(":name/files/content", use: apiFileWrite)
+        scoped.get(":name/files/download", use: apiFileDownload)
+        scoped.post(":name/files/upload", use: apiFileUpload)
+        scoped.post(":name/files/dir", use: apiFileMkdir)
+        scoped.post(":name/files/move", use: apiFileMove)
+        scoped.delete(":name/files/entry", use: apiFileDelete)
         scoped.get(":name/schedule", use: apiScheduleGet)
         scoped.post(":name/schedule", use: apiScheduleSet)
         scoped.delete(":name/schedule", use: apiScheduleDelete)
@@ -527,6 +532,145 @@ struct PanelRoutes {
             return fileError(
                 error, user: try context.requireIdentity().username, container: name, ip: context.clientIP, detail: "write \(path)")
         }
+    }
+
+    struct MkdirBody: Decodable { let path: String }
+
+    @Sendable func apiFileMkdir(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let (name, service) = try await fileService(context)
+        guard let body = try? await request.decode(as: MkdirBody.self, context: context), !body.path.isEmpty else {
+            return json(["error": "path required"], status: .badRequest)
+        }
+        do {
+            try service.makeDirectory(body.path)
+            audit(
+                user: try context.requireIdentity().username, action: "container.files", container: name,
+                outcome: "ok", ip: context.clientIP, detail: "mkdir \(body.path)")
+            return json(["ok": true])
+        } catch {
+            return fileError(
+                error, user: try context.requireIdentity().username, container: name, ip: context.clientIP,
+                detail: "mkdir \(body.path)")
+        }
+    }
+
+    struct MoveBody: Decodable {
+        let from: String
+        let to: String
+    }
+
+    @Sendable func apiFileMove(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let (name, service) = try await fileService(context)
+        guard let body = try? await request.decode(as: MoveBody.self, context: context),
+            !body.from.isEmpty, !body.to.isEmpty
+        else {
+            return json(["error": "from and to required"], status: .badRequest)
+        }
+        do {
+            try service.move(from: body.from, to: body.to)
+            audit(
+                user: try context.requireIdentity().username, action: "container.files", container: name,
+                outcome: "ok", ip: context.clientIP, detail: "move \(body.from) -> \(body.to)")
+            return json(["ok": true])
+        } catch {
+            return fileError(
+                error, user: try context.requireIdentity().username, container: name, ip: context.clientIP,
+                detail: "move \(body.from) -> \(body.to)")
+        }
+    }
+
+    @Sendable func apiFileDelete(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let (name, service) = try await fileService(context)
+        guard let path = request.uri.queryParameters["path"].map(String.init), !path.isEmpty else {
+            return json(["error": "path required"], status: .badRequest)
+        }
+        do {
+            try service.delete(path)
+            audit(
+                user: try context.requireIdentity().username, action: "container.files", container: name,
+                outcome: "ok", ip: context.clientIP, detail: "delete \(path)")
+            return json(["ok": true])
+        } catch {
+            return fileError(
+                error, user: try context.requireIdentity().username, container: name, ip: context.clientIP,
+                detail: "delete \(path)")
+        }
+    }
+
+    @Sendable func apiFileUpload(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let (name, service) = try await fileService(context)
+        guard let path = request.uri.queryParameters["path"].map(String.init), !path.isEmpty else {
+            return json(["error": "path required"], status: .badRequest)
+        }
+        // Bound the in-memory collect to the same cap the service enforces, so an
+        // oversize upload is rejected before we buffer the whole thing.
+        let buffer: ByteBuffer
+        do {
+            buffer = try await request.body.collect(upTo: FileService.maxUploadBytes)
+        } catch {
+            return fileError(
+                FileServiceError.tooLarge(actualBytes: FileService.maxUploadBytes + 1, limitBytes: FileService.maxUploadBytes),
+                user: try context.requireIdentity().username, container: name, ip: context.clientIP, detail: "upload \(path)")
+        }
+        let data = Data(buffer.readableBytesView)
+        do {
+            try service.writeData(path, data: data)
+            audit(
+                user: try context.requireIdentity().username, action: "container.files", container: name,
+                outcome: "ok", ip: context.clientIP, detail: "upload \(path) (\(data.count) bytes)")
+            return json(["ok": true])
+        } catch {
+            return fileError(
+                error, user: try context.requireIdentity().username, container: name, ip: context.clientIP,
+                detail: "upload \(path)")
+        }
+    }
+
+    @Sendable func apiFileDownload(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let (name, service) = try await fileService(context)
+        guard let path = request.uri.queryParameters["path"].map(String.init), !path.isEmpty else {
+            return json(["error": "path required"], status: .badRequest)
+        }
+        let target: (url: URL, size: Int)
+        do {
+            target = try service.downloadTarget(path)
+        } catch {
+            return fileError(
+                error, user: try context.requireIdentity().username, container: name, ip: context.clientIP,
+                detail: "download \(path)")
+        }
+        audit(
+            user: try context.requireIdentity().username, action: "container.files", container: name,
+            outcome: "ok", ip: context.clientIP, detail: "download \(path)")
+        return Self.fileDownloadResponse(url: target.url, size: target.size)
+    }
+
+    /// Streams a confined file from disk in bounded chunks so a large download
+    /// never loads the whole file into memory. The path was already validated by
+    /// `FileService.downloadTarget`. `Content-Disposition: attachment` with a
+    /// sanitized filename; the browser saves rather than renders it.
+    static func fileDownloadResponse(url: URL, size: Int) -> Response {
+        let filename = url.lastPathComponent.replacingOccurrences(of: "\"", with: "")
+        let body = ResponseBody(contentLength: size) { writer in
+            guard let handle = try? FileHandle(forReadingFrom: url) else {
+                try await writer.finish(nil)
+                return
+            }
+            defer { try? handle.close() }
+            while true {
+                let chunk = (try? handle.read(upToCount: 64 * 1024)) ?? Data()
+                if chunk.isEmpty { break }
+                try await writer.write(ByteBuffer(bytes: chunk))
+            }
+            try await writer.finish(nil)
+        }
+        return Response(
+            status: .ok,
+            headers: [
+                .contentType: "application/octet-stream",
+                .contentDisposition: "attachment; filename=\"\(filename)\"",
+            ],
+            body: body)
     }
 
     /// Resolves the FileService for the addressed container, or 404 if it has no

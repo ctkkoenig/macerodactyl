@@ -98,13 +98,24 @@ struct ContainerScopeMiddleware: RouterMiddleware {
     }
 
     /// Maps a container route path to the permission it requires — the single
-    /// place this mapping lives.
+    /// place this mapping lives. Matches on the fixed route position
+    /// (`/api/containers/<name>/<action>/…`) rather than substring-containment,
+    /// so a container literally named `files`/`power`/`console`/`schedule`
+    /// cannot make an action mis-map to the wrong (weaker) permission.
     static func requiredPermission(path: String) -> ContainerPermission {
-        if path.contains("/files") { return .files }
-        if path.contains("/schedule") { return .schedules }
-        if path.hasSuffix("/console") { return .console }
-        if path.hasSuffix("/power") { return .power }
-        return .view  // detail, logs, stats
+        let comps = path.split(separator: "/").map(String.init)
+        // Fixed mount: ["api", "containers", <name>, <action>, …]. Anything
+        // shorter is the list/detail route and needs only view.
+        guard comps.count >= 4, comps[0] == "api", comps[1] == "containers" else {
+            return .view
+        }
+        switch comps[3] {
+        case "files": return .files
+        case "schedule": return .schedules
+        case "console": return .console
+        case "power": return .power
+        default: return .view  // detail, logs, stats
+        }
     }
 
     private func auditAction(for permission: ContainerPermission) -> String {
