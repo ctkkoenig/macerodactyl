@@ -81,8 +81,35 @@ case "daemon":
         if let path = manager.installedBinaryPath() { print("binary: \(path)") }
     }
 
+case "db":
+    switch args.count >= 2 ? args[1] : "check" {
+    case "check", "integrity":
+        let result = try store.integrityCheck()
+        print("integrity: \(result.joined(separator: "; "))  (\(store.isHealthy ? "healthy" : "PROBLEMS"))")
+    case "checkpoint":
+        try store.checkpoint()
+        print("WAL checkpointed (truncated)")
+    case "backup":
+        guard args.count == 3 else {
+            print("usage: paneltool db backup <destination-path>")
+            break
+        }
+        try store.backup(toPath: args[2])
+        print("backup written to \(args[2])")
+    case "restore":
+        guard args.count == 3 else {
+            print("usage: paneltool db restore <backup-path>  (STOP the panel first)")
+            break
+        }
+        let sidelined = try PanelBackup.restore(from: args[2], to: dbPath)
+        print("restored from \(args[2]); previous DB kept at \(sidelined)")
+    default:
+        print("usage: paneltool db check | checkpoint | backup <path> | restore <path>")
+    }
+
 default:
     print("usage: paneltool list | add-admin U P | add-user U P | grant U CONTAINER perms | audit")
     print("       paneltool daemon install <macerodactyld-path> | uninstall | status")
+    print("       paneltool db check | checkpoint | backup <path> | restore <path>")
     print("db: \(dbPath)")
 }

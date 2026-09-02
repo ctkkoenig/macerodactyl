@@ -109,6 +109,64 @@ public final class Database: @unchecked Sendable {
         get { (try? query("PRAGMA user_version").first?["user_version"]?.asInt).flatMap { Int($0) } ?? 0 }
         set { try? execute("PRAGMA user_version = \(newValue)") }
     }
+
+    // MARK: Durability / operations
+
+    /// Folds the write-ahead log back into the main database file and truncates
+    /// it, so the WAL can't grow without bound and the main file is current.
+    public func checkpoint() throws {
+        try execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    }
+
+    /// Runs SQLite's integrity check. Returns the raw rows — `["ok"]` when the
+    /// database is healthy, otherwise one row per problem found.
+    public func integrityCheck() throws -> [String] {
+        try query("PRAGMA integrity_check").compactMap { $0["integrity_check"]?.asString }
+    }
+
+    public var isHealthy: Bool {
+        (try? integrityCheck()) == ["ok"]
+    }
+
+    /// Writes a clean, consistent copy of the live database to `path` using
+    /// `VACUUM INTO` — safe to call while the database is open and in use, and
+    /// the copy is defragmented with no leftover WAL. The destination must not
+    /// already exist.
+    public func backup(toPath path: String) throws {
+        try checkpoint()
+        try run("VACUUM INTO ?", [.text(path)])
+    }
+}
+
+/// Backup/restore for the panel database. Backups are made live-safe via
+/// `PanelDataStore.backup(toPath:)` (VACUUM INTO); restore installs a validated
+/// backup as the live database and MUST be done while the panel is stopped —
+/// the GUI server and the daemon must not hold the database open, or restoring
+/// under them corrupts state.
+public enum PanelBackup {
+    /// Validates a backup file's integrity and installs it as the live database.
+    /// The current database (and any stale WAL/SHM) is moved aside first and its
+    /// path returned, so a bad restore can be undone. Caller must stop the panel.
+    @discardableResult
+    public static func restore(from backupPath: String, to dbPath: String) throws -> String {
+        // 1. The backup must open and pass integrity_check before we touch the
+        //    live database — never install a corrupt backup.
+        let healthy: Bool
+        do {
+            let check = try Database(path: backupPath)
+            healthy = check.isHealthy
+        }
+        guard healthy else { throw DatabaseError.stepFailed("backup failed integrity check: \(backupPath)") }
+
+        let fm = FileManager.default
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let sidelined = "\(dbPath).pre-restore-\(stamp)"
+        if fm.fileExists(atPath: dbPath) { try fm.moveItem(atPath: dbPath, toPath: sidelined) }
+        // Stale WAL/SHM would otherwise be replayed onto the restored file.
+        for suffix in ["-wal", "-shm"] { try? fm.removeItem(atPath: dbPath + suffix) }
+        try fm.copyItem(atPath: backupPath, toPath: dbPath)
+        return sidelined
+    }
 }
 
 /// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
@@ -386,6 +444,20 @@ public final class PanelDataStore: Sendable {
 
     public func clearRateLimit(key: String) throws {
         try db.run("DELETE FROM rate_limits WHERE key = ?", [.text(key)])
+    }
+
+    // MARK: Durability / operations (pass-throughs)
+
+    public func checkpoint() throws { try db.checkpoint() }
+    public func integrityCheck() throws -> [String] { try db.integrityCheck() }
+    public var isHealthy: Bool { db.isHealthy }
+
+    /// Writes a consistent backup copy to `path` (must not exist). Live-safe.
+    public func backup(toPath path: String) throws {
+        guard !FileManager.default.fileExists(atPath: path) else {
+            throw DatabaseError.stepFailed("backup destination already exists: \(path)")
+        }
+        try db.backup(toPath: path)
     }
 
     /// Housekeeping: drop rows whose lockout has fully elapsed and which have no
