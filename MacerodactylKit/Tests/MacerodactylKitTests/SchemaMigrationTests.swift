@@ -19,6 +19,23 @@ import Testing
         #expect(grants["bot"]?.schedules == true)
     }
 
+    @Test func updatingAnExistingGrantWritesSchedules() throws {
+        // The ON CONFLICT DO UPDATE path (existing row), not just INSERT.
+        let store = try PanelDataStore(databasePath: tempDBPath())
+        let user = try store.createUser(username: "a", passwordHash: "h", isAdmin: false)
+        try store.setGrant(userID: user.id, containerName: "bot",
+                          grant: ContainerGrant(view: true, power: true)) // schedules off
+        #expect(try store.grants(forUserID: user.id)["bot"]?.schedules == false)
+        // Update the same row to add schedules.
+        try store.setGrant(userID: user.id, containerName: "bot",
+                          grant: ContainerGrant(view: true, power: true, schedules: true))
+        #expect(try store.grants(forUserID: user.id)["bot"]?.schedules == true)
+        // And turning it back off updates too.
+        try store.setGrant(userID: user.id, containerName: "bot",
+                          grant: ContainerGrant(view: true, power: true, schedules: false))
+        #expect(try store.grants(forUserID: user.id)["bot"]?.schedules == false)
+    }
+
     @Test func v1DatabaseMigratesToV2PreservingGrants() throws {
         let path = try tempDBPath()
         // Build a v1 database by hand (no perm_schedules column).

@@ -41,7 +41,8 @@ case "grant":
     let perms = Set(args[3].split(separator: ",").map(String.init))
     let grant = ContainerGrant(
         view: perms.contains("view"), power: perms.contains("power"),
-        files: perms.contains("files"), console: perms.contains("console")
+        files: perms.contains("files"), console: perms.contains("console"),
+        schedules: perms.contains("schedules")
     )
     try accounts.setGrant(userID: user.id, containerName: args[2], grant: grant, filesGrantable: true)
     print("granted \(args[1]) on \(args[2]): \(perms.sorted().joined(separator: ", "))")
