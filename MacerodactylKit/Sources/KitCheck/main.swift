@@ -160,6 +160,19 @@ case "files":
         exit(4)
     }
 
+case "schedule-preview":
+    // kitcheck schedule-preview NAME HH MM — prints the exact plist install() would write, writes nothing.
+    guard arguments.count == 5, let hour = Int(arguments[3]), let minute = Int(arguments[4]) else {
+        print("usage: kitcheck schedule-preview NAME HH MM")
+        exit(64)
+    }
+    let service = try ScheduleService(dockerPath: binary.path)
+    let schedule = RestartSchedule(containerName: arguments[2], hour: hour, minute: minute)
+    print("would write to: \(service.plistPath(for: schedule).path)")
+    print("then run: launchctl bootstrap gui/\(getuid()) <that path>")
+    print(String(repeating: "-", count: 60))
+    print(try service.plistXML(for: schedule))
+
 case nil:
     await listContainers()
 

@@ -50,6 +50,8 @@ struct ContainerDetailView: View {
                 header
                 actions
                 overview
+                Divider()
+                ScheduleSection(store: store, container: container)
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
