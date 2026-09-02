@@ -1,3 +1,4 @@
+import MacerodactylKit
 import SwiftUI
 
 /// Files tab. Availability is decided by FileService's init: no stack folder

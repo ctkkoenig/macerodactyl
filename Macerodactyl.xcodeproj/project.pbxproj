@@ -11,6 +11,7 @@
 		A10000000000000000000004 /* MacerodactylKit in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000000E /* MacerodactylKit */; };
 		A10000000000000000000016 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000015 /* Assets.xcassets */; };
 		A10000000000000000000018 /* MacerodactylPanel in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000017 /* MacerodactylPanel */; };
+		A1000000000000000000001A /* MacerodactylUI in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000019 /* MacerodactylUI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -26,6 +27,7 @@
 			files = (
 				A10000000000000000000004 /* MacerodactylKit in Frameworks */,
 				A10000000000000000000018 /* MacerodactylPanel in Frameworks */,
+				A1000000000000000000001A /* MacerodactylUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -76,6 +78,7 @@
 			packageProductDependencies = (
 				A1000000000000000000000E /* MacerodactylKit */,
 				A10000000000000000000017 /* MacerodactylPanel */,
+				A10000000000000000000019 /* MacerodactylUI */,
 			);
 			productName = Macerodactyl;
 			productReference = A10000000000000000000002 /* Macerodactyl.app */;
@@ -263,6 +266,10 @@
 		A10000000000000000000017 /* MacerodactylPanel */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = MacerodactylPanel;
+		};
+		A10000000000000000000019 /* MacerodactylUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MacerodactylUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -1,3 +1,4 @@
+import MacerodactylKit
 import SwiftUI
 
 /// The per-container workspace: a persistent section sidebar (Console, Overview,

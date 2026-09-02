@@ -7,7 +7,9 @@ let package = Package(
     products: [
         .library(name: "MacerodactylKit", targets: ["MacerodactylKit"]),
         .library(name: "MacerodactylPanel", targets: ["MacerodactylPanel"]),
+        .library(name: "MacerodactylUI", targets: ["MacerodactylUI"]),
         .executable(name: "kitcheck", targets: ["KitCheck"]),
+        .executable(name: "macerodactyld", targets: ["macerodactyld"]),
     ],
     dependencies: [
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.0"),
@@ -31,12 +33,20 @@ let package = Package(
                 .product(name: "HummingbirdBcrypt", package: "hummingbird-auth"),
             ]
         ),
+        .target(
+            name: "MacerodactylUI",
+            dependencies: ["MacerodactylKit", "MacerodactylPanel"]
+        ),
         .executableTarget(
             name: "KitCheck",
             dependencies: ["MacerodactylKit"]
         ),
         .executableTarget(
             name: "PanelTool",
+            dependencies: ["MacerodactylKit", "MacerodactylPanel"]
+        ),
+        .executableTarget(
+            name: "macerodactyld",
             dependencies: ["MacerodactylKit", "MacerodactylPanel"]
         ),
         .testTarget(

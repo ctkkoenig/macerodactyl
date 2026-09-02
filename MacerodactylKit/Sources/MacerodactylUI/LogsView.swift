@@ -1,3 +1,4 @@
+import MacerodactylKit
 import SwiftUI
 
 /// Live log tail for one container. The stream (and its `docker logs -f`

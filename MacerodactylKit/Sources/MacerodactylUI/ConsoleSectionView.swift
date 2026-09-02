@@ -1,3 +1,4 @@
+import MacerodactylKit
 import SwiftUI
 
 /// The signature screen: power buttons across the top (Start, Restart, Stop, and

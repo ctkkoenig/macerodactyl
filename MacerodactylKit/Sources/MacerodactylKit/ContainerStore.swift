@@ -230,7 +230,7 @@ public final class ContainerStore {
         advisories = StartupDiagnostics.evaluate(await environmentSnapshot())
     }
 
-    nonisolated static func describe(_ error: Error) -> String {
+    public nonisolated static func describe(_ error: Error) -> String {
         switch error {
         case DockerError.daemonUnavailable: "Docker isn't running."
         case DockerError.timeout: "The docker command timed out."

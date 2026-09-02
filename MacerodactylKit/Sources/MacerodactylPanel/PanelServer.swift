@@ -76,4 +76,22 @@ public actor PanelServer {
         runTask = nil
         isRunning = false
     }
+
+    /// Runs the server in the foreground until it receives SIGTERM/SIGINT, then
+    /// shuts down gracefully. This is the entry point for the headless
+    /// `macerodactyld` daemon, which launchd supervises — the process must stay
+    /// alive for the server's lifetime rather than returning immediately.
+    /// nonisolated: builds fresh state and only reads Sendable members.
+    public nonisolated func runUntilTerminated(config: PanelServerConfig, logger: Logger) async throws {
+        let router = buildRouter()
+        let app = Application(
+            router: router,
+            configuration: .init(
+                address: .hostname(config.host, port: config.port),
+                serverName: "Macerodactyl"
+            ),
+            logger: logger
+        )
+        try await app.runService()
+    }
 }

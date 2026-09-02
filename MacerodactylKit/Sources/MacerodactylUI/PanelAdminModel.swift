@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import MacerodactylKit
+import MacerodactylPanel
 import Observation
 import SwiftUI
 

@@ -1,4 +1,5 @@
 import MacerodactylKit
+import MacerodactylPanel
 import SwiftUI
 
 /// Native management surface for the web panel: enable/bind/port, first-run
