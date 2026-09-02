@@ -248,6 +248,33 @@ case "diagnose":
         for advisory in advisories { print("  [\(advisory.severity)] \(advisory.title) — \(advisory.remedy)") }
     }
 
+case "stats":
+    // Snapshot (all) and, if a name is given, a few streamed samples.
+    do {
+        let snap = try await cli.statsSnapshot()
+        print("snapshot: \(snap.count) container(s) with live readings")
+        for (name, s) in snap.sorted(by: { $0.key < $1.key }) {
+            print("  \(name): cpu \(String(format: "%.1f", s.cpuPercent))%  mem \(ByteFormat.string(s.memUsedBytes))/\(ByteFormat.string(s.memLimitBytes)) (\(String(format: "%.1f", s.memPercent))%)  net ↓\(ByteFormat.string(s.netRxBytes)) ↑\(ByteFormat.string(s.netTxBytes))  pids \(s.pids)")
+        }
+    } catch DockerError.daemonUnavailable {
+        print("snapshot: daemon down — UI shows 'Unavailable', not zeros")
+    }
+    if arguments.count == 3 {
+        print("\nstreaming \(arguments[2]) (3 samples)...")
+        var n = 0
+        for try await s in cli.statsStream(containerID: arguments[2]) {
+            print("  sample: cpu \(String(format: "%.2f", s.cpuPercent))%  mem \(ByteFormat.string(s.memUsedBytes))")
+            n += 1; if n >= 3 { break }
+        }
+        print("stream stopped after \(n) samples")
+        try? await Task.sleep(for: .seconds(1))
+        let check = Process(); check.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        check.arguments = ["-fl", "docker stats"]; let pipe = Pipe(); check.standardOutput = pipe
+        try? check.run(); check.waitUntilExit()
+        let leaked = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        print(leaked.isEmpty ? "teardown: OK — no leaked docker stats process" : "teardown: LEAK:\n\(leaked)")
+    }
+
 case nil:
     await listContainers()
 

@@ -129,8 +129,12 @@ public final class ContainerStore {
 
     // MARK: Power actions
 
-    public enum PowerAction: String, Sendable {
-        case start, stop, restart
+    public enum PowerAction: String, Sendable, CaseIterable {
+        case start, stop, restart, kill
+
+        /// `docker kill` is an abrupt SIGKILL, not a graceful stop — a distinct
+        /// destructive action the UI presents separately and confirms.
+        public var isDestructive: Bool { self == .kill }
     }
 
     /// Runs a power action on one container, then refreshes. Errors land in
@@ -168,6 +172,7 @@ public final class ContainerStore {
         case .start: ["--project-directory", workingDir, "up", "-d"]
         case .stop: ["--project-directory", workingDir, "stop"]
         case .restart: ["--project-directory", workingDir, "restart"]
+        case .kill: ["--project-directory", workingDir, "kill"]
         }
         let (executable, args) = compose.invocation(subArgs)
         for container in stack.containers { busyContainerIDs.insert(container.id) }

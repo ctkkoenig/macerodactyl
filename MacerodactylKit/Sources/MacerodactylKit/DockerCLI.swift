@@ -149,6 +149,54 @@ public struct DockerCLI: Sendable {
         }
     }
 
+    /// One-shot stats for all running containers in a single process
+    /// (`docker stats --no-stream`). Cheaper than per-container polling; used
+    /// for the landing cards on a slow cadence. Returns only real readings.
+    public func statsSnapshot(timeout: Duration = .seconds(20)) async throws -> [String: ContainerStats] {
+        let output = try await run(["stats", "--no-stream", "--format", "{{json .}}"], timeout: timeout)
+        return DockerStatsParser.parseSnapshot(output)
+    }
+
+    /// Continuous stats for one container, by polling `docker stats --no-stream`
+    /// on a short interval. Streaming mode (`docker stats` without --no-stream)
+    /// is unusable when piped: it emits ANSI screen-refresh sequences that
+    /// aren't valid JSON. Polling --no-stream gives clean readings, one
+    /// container per short-lived call, and trivial teardown — cancel the
+    /// consumer and the loop stops (no long-lived process to leak).
+    public func statsStream(containerID: String, interval: Duration = .seconds(2)) -> AsyncThrowingStream<ContainerStats, Error> {
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                while !Task.isCancelled {
+                    do {
+                        let output = try await run(["stats", "--no-stream", "--format", "{{json .}}", containerID], timeout: .seconds(20))
+                        if let stats = DockerStatsParser.parse(line: output.split(separator: "\n").first.map(String.init) ?? output) {
+                            continuation.yield(stats)
+                        }
+                    } catch is CancellationError {
+                        break
+                    } catch {
+                        continuation.finish(throwing: error)
+                        return
+                    }
+                    try? await Task.sleep(for: interval)
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// The container's start time, for a truthful uptime (nil if unavailable).
+    public func startedAt(containerID: String) async -> Date? {
+        guard let output = try? await run(
+            ["inspect", "--format", "{{.State.StartedAt}}", containerID], timeout: .seconds(10)
+        ) else { return nil }
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: trimmed) ?? ISO8601DateFormatter().date(from: trimmed)
+    }
+
     /// True if `docker compose version` succeeds (the plugin is installed).
     public func composePluginWorks() async -> Bool {
         guard let result = try? await execute(["compose", "version"], timeout: .seconds(10)) else {
