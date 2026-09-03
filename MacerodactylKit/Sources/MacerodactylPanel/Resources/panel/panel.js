@@ -315,7 +315,7 @@ function render() {
   else if (tab === 'schedules') { parts.push(h('div', { id: 'sched' }, 'Loading…')); }
   show(parts);
   if (tab === 'logs') startLogs();
-  if (tab === 'console') bindConsole();
+  if (tab === 'console') { bindConsole(); startConsole(); }
   if (tab === 'overview') loadSparkline();
   if (tab === 'files') listDir('');
   if (tab === 'schedules') loadSchedule();
@@ -380,28 +380,42 @@ function quickRow() {
   return h('div', { class: 'quick' }, quick.map(q => h('button', { onclick: () => qk(q), text: q })));
 }
 function inputBar() {
-  const mc = /mc|minecraft/i.test(current);
   return h('div', { class: 'inputbar' },
     h('span', { class: 'chev', text: '›' }),
-    h('input', { id: 'cin', placeholder: mc ? 'server command' : 'shell command', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' }),
+    h('input', { id: 'cin', placeholder: 'Console command (e.g. say hi, stop)', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' }),
     h('button', { onclick: runCmd }, 'Send'));
 }
-let history = [];
+let history = [], histAt = 0;
 function bindConsole() {
   const inp = document.getElementById('cin');
-  if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') runCmd(); if (e.key === 'ArrowUp' && history.length) inp.value = history[history.length - 1]; });
+  if (inp) inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter') runCmd();
+    else if (e.key === 'ArrowUp' && history.length) { histAt = Math.max(0, histAt - 1); inp.value = history[histAt] || ''; }
+    else if (e.key === 'ArrowDown' && history.length) { histAt = Math.min(history.length, histAt + 1); inp.value = history[histAt] || ''; }
+  });
 }
 function qk(t) { const i = document.getElementById('cin'); i.value += t; i.focus(); }
+// The console feeds off the live LOG stream (one reliable output source), and
+// input goes to the server process's stdin — a command's result shows up in the
+// stream like any other output (the Pterodactyl console model).
+function startConsole() {
+  const term = document.getElementById('cterm'); if (!term || logSrc) return;
+  logSrc = new EventSource(api('/logs'));
+  logSrc.onmessage = e => {
+    const at = term.scrollTop + term.clientHeight >= term.scrollHeight - 30;
+    term.append(e.data + '\n');
+    if (at) term.scrollTop = term.scrollHeight;
+  };
+}
 async function runCmd() {
   const inp = document.getElementById('cin'), term = document.getElementById('cterm');
-  const cmd = inp.value.trim(); if (!cmd) return; inp.value = ''; history.push(cmd);
-  term.append(h('div', { class: 'cmdline', text: '$ ' + cmd }));
-  try {
-    const r = await fetch(api('/console'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ command: cmd }) });
-    const j = await r.json();
-    term.append(h('div', { class: j.isError ? 'cerr' : '', text: j.output || '' }));
-  } catch (e) { term.append(h('div', { class: 'cerr', text: 'request failed' })); }
+  const cmd = inp.value.trim(); if (!cmd) return; inp.value = ''; history.push(cmd); histAt = history.length;
+  term.append(h('div', { class: 'cmdline', text: '> ' + cmd }));
   term.scrollTop = term.scrollHeight;
+  try {
+    const r = await fetch(api('/console/input'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ line: cmd }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); term.append(h('div', { class: 'cerr', text: j.error || 'The server rejected the command.' })); term.scrollTop = term.scrollHeight; }
+  } catch (e) { term.append(h('div', { class: 'cerr', text: 'request failed' })); }
 }
 
 // --- logs (stream + search + download) --------------------------------------
