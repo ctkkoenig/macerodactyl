@@ -392,6 +392,7 @@ extension PanelRoutes {
             return json(["error": "bad request"], status: .badRequest)
         }
         // Apply edits onto the record (unset fields keep their current value).
+        let previousOwnerID = record.ownerUserID
         record.displayName = body.displayName ?? record.displayName
         record.dockerImage = body.image?.isEmpty == false ? body.image! : record.dockerImage
         record.ownerUserID = body.ownerUserId ?? record.ownerUserID
@@ -409,6 +410,15 @@ extension PanelRoutes {
             name: name, displayName: record.displayName, dockerImage: record.dockerImage,
             ownerUserID: record.ownerUserID, limits: record.limits, startup: record.startup, values: values)
 
+        // Ownership transfer: the OUTGOING owner must not keep their full grant,
+        // or a removed owner would retain complete access to a server they no
+        // longer own. Revoke it (they can be re-added explicitly as a sub-user).
+        if let previousOwnerID, previousOwnerID != record.ownerUserID {
+            try? store.setGrant(userID: previousOwnerID, containerName: name, grant: ContainerGrant())
+            audit(
+                user: user.username, action: "admin.server.owner_revoke", container: name, outcome: "ok",
+                ip: context.clientIP, detail: "\(previousOwnerID)")
+        }
         // Re-grant the (possibly new) owner.
         if let ownerID = record.ownerUserID, let owner = try? store.user(id: ownerID) {
             try? AccountManager(store: store).setGrant(

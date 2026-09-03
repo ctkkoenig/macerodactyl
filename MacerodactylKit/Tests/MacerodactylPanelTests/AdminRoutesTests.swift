@@ -349,6 +349,30 @@ import Testing
         }
     }
 
+    @Test func transferringOwnershipRevokesTheOldOwnersGrant() async throws {
+        let h = try await makeHarness()
+        try await h.app.test(.router) { client in
+            let adminToken = try await login(client, "admin", h.adminPassword)
+            let oldOwner = try #require(try h.store.user(named: "scoped"))
+            let newOwner = try await AccountManager(store: h.store).createUser(
+                username: "newowner", password: "newowner-pw-1", isAdmin: false)
+            let eggId = try await importEgg(client, token: adminToken, nestName: "MC", json: sampleEgg)
+            try await generateAllocations(client, token: adminToken, start: 25565, end: 25566)
+            let create = ByteBuffer(string: #"{"name":"mc1","eggId":\#(eggId),"ownerUserId":\#(oldOwner.id),"memoryMiB":512}"#)
+            try await client.execute(uri: "/api/admin/servers", method: .post, headers: authed(adminToken), body: create) { _ in }
+            #expect(try h.store.grants(forUserID: oldOwner.id)["mc1"] != nil)  // owner was granted
+
+            // Admin transfers ownership to newOwner.
+            let edit = ByteBuffer(string: #"{"ownerUserId":\#(newOwner.id)}"#)
+            try await client.execute(uri: "/api/admin/servers/mc1", method: .put, headers: authed(adminToken), body: edit) { _ in }
+
+            // The OUTGOING owner's grant is gone; the new owner holds a full grant.
+            #expect(try h.store.grants(forUserID: oldOwner.id)["mc1"] == nil, "removed owner must not retain access")
+            let ng = try #require(try h.store.grants(forUserID: newOwner.id)["mc1"])
+            #expect(ng.view && ng.power && ng.files && ng.console && ng.schedules && ng.lifecycle && ng.backups)
+        }
+    }
+
     @Test func eggUpdateRejectsAnEggWithNoSource() async throws {
         let h = try await makeHarness()
         try await h.app.test(.router) { client in
