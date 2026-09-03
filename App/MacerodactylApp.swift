@@ -67,14 +67,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let bundleID = current.bundleIdentifier ?? "com.macerodactyl.app"
         let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
             .filter { $0.processIdentifier != current.processIdentifier && !$0.isTerminated }
-        // If another instance is already up, defer to it and exit. Comparing
-        // launch dates makes the race deterministic: the earlier one survives.
-        let earlierExists = others.contains { other in
-            guard let theirs = other.launchDate, let mine = current.launchDate else { return true }
-            return theirs <= mine
-        }
-        if earlierExists {
-            others.first?.activate(options: [.activateAllWindows])
+
+        // The election (pure, tested in the Kit) decides the single survivor:
+        // earliest launch wins by strict `<`, a nil launch date never wins, ties
+        // break on the lower pid — so exactly one instance survives and both
+        // copies agree on which. If another instance is elected, bring *that* one
+        // to the front (found by pid, not an arbitrary element) and quit.
+        let currentInfo = InstanceInfo(processIdentifier: current.processIdentifier, launchDate: current.launchDate)
+        let otherInfos = others.map { InstanceInfo(processIdentifier: $0.processIdentifier, launchDate: $0.launchDate) }
+        if let winner = SingleInstanceElection.survivingOther(current: currentInfo, others: otherInfos) {
+            others.first { $0.processIdentifier == winner.processIdentifier }?
+                .activate(options: [.activateAllWindows])
             exit(0)
         }
     }
