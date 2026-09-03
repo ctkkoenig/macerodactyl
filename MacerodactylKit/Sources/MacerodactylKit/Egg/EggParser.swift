@@ -20,6 +20,19 @@ public enum EggParser {
         return try parse(data)
     }
 
+    /// The `meta.update_url` an egg export may carry — the upstream source it can
+    /// be refreshed from. nil when absent or not an http(s) URL.
+    public static func updateURL(fromJSON json: String) -> URL? {
+        guard let data = json.data(using: .utf8),
+            let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            let meta = root["meta"] as? [String: Any],
+            let raw = Coerce.string(meta["update_url"]), !raw.isEmpty,
+            let url = URL(string: raw), let scheme = url.scheme?.lowercased(),
+            scheme == "http" || scheme == "https"
+        else { return nil }
+        return url
+    }
+
     public static func parse(_ data: Data) throws -> PterodactylEgg {
         guard let any = try? JSONSerialization.jsonObject(with: data) else {
             throw ParseError.notJSON

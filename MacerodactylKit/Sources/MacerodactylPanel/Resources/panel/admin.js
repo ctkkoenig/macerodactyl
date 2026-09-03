@@ -485,7 +485,10 @@ async function renderNests() {
     h('div', { class: 'field', style: 'flex:0 0 auto;justify-content:flex-end' }, h('button', { class: 'btn', type: 'submit' }, 'Add nest')));
 
   const erows = eggs.map(e => h('tr', null, h('td', { text: e.name }), h('td', { text: nestName[e.nestId] || e.nestId }), h('td', null, badge(e.metaVersion || '?', 'muted')),
-    h('td', null, h('div', { class: 'rowact' }, h('a', { class: 'btn ghost sm', href: '/api/admin/eggs/' + e.id + '/export' }, 'Export'), h('button', { class: 'btn ghost sm danger', onclick: async () => { if (!confirm('Delete egg ' + e.name + '?')) return; try { await jsend('DELETE', '/api/admin/eggs/' + e.id); route(); } catch (err) { alert(err); } } }, 'Delete')))));
+    h('td', null, h('div', { class: 'rowact' },
+      h('a', { class: 'btn ghost sm', href: '/api/admin/eggs/' + e.id + '/export' }, 'Export'),
+      e.updatable ? h('button', { class: 'btn ghost sm', onclick: async () => { if (!confirm('Update "' + e.name + '" from its source URL? Its variables and startup are replaced with the upstream version.')) return; try { const r = await jsend('POST', '/api/admin/eggs/' + e.id + '/update'); alert('Updated "' + r.name + '"' + (r.warnings.length ? ' with warnings: ' + r.warnings.join('; ') : '.')); route(); } catch (err) { alert(err); } } }, 'Update') : null,
+      h('button', { class: 'btn ghost sm danger', onclick: async () => { if (!confirm('Delete egg ' + e.name + '?')) return; try { await jsend('DELETE', '/api/admin/eggs/' + e.id); route(); } catch (err) { alert(err); } } }, 'Delete')))));
 
   const inote = h('div');
   const iform = h('form', { onsubmit: async e => { e.preventDefault();

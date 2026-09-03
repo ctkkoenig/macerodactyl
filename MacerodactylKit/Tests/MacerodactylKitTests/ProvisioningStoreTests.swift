@@ -131,6 +131,49 @@ import Testing
         #expect(stored.dockerImages.first?.image == "ghcr.io/pterodactyl/yolks:java_21")
     }
 
+    @Test func updateEggReplacesInPlacePreservingID() throws {
+        let s = try store()
+        let nestID = try s.createNest(name: "MC", author: nil, description: nil)
+        let v1 = """
+            {"meta":{"version":"PTDL_v2","update_url":"https://example.com/egg.json"},"name":"Paper","author":"a","description":"d",
+             "docker_images":{"Java 17":"ghcr.io/pterodactyl/yolks:java_17"},
+             "startup":"java -jar {{SERVER_JARFILE}}",
+             "config":{"files":"{}","startup":"{}","logs":"{}","stop":"stop"},
+             "scripts":{"installation":{"script":"echo v1","container":"debian","entrypoint":"bash"}},
+             "variables":[{"name":"Jar","env_variable":"SERVER_JARFILE","default_value":"old.jar",
+               "user_viewable":true,"user_editable":true,"rules":"required"}]}
+            """
+        let eggID = try s.importEgg(try EggParser.parse(v1), rawJSON: v1, nestID: nestID)
+        // update_url is exposed for the "update from source" action.
+        #expect(EggParser.updateURL(fromJSON: v1)?.absoluteString == "https://example.com/egg.json")
+
+        // A newer export: different image, startup, and a renamed variable.
+        let v2 = """
+            {"meta":{"version":"PTDL_v2"},"name":"Paper","author":"a","description":"d2",
+             "docker_images":{"Java 21":"ghcr.io/pterodactyl/yolks:java_21"},
+             "startup":"java -Xmx1G -jar {{SERVER_JARFILE}}",
+             "config":{"files":"{}","startup":"{}","logs":"{}","stop":"stop"},
+             "scripts":{"installation":{"script":"echo v2","container":"debian","entrypoint":"bash"}},
+             "variables":[{"name":"Jar","env_variable":"SERVER_JARFILE","default_value":"new.jar",
+               "user_viewable":true,"user_editable":true,"rules":"required"}]}
+            """
+        try s.updateEgg(id: eggID, egg: try EggParser.parse(v2), rawJSON: v2)
+        let stored = try #require(try s.egg(id: eggID))
+        #expect(stored.id == eggID)  // same id
+        let reparsed = try stored.parsed()
+        #expect(reparsed.startup == "java -Xmx1G -jar {{SERVER_JARFILE}}")
+        #expect(reparsed.variables.first?.defaultValue == "new.jar")
+        #expect(stored.dockerImages.first?.image == "ghcr.io/pterodactyl/yolks:java_21")
+        // Variables were replaced, not duplicated.
+        #expect(reparsed.variables.count == 1)
+    }
+
+    @Test func updateURLRejectsMissingOrNonHTTP() {
+        #expect(EggParser.updateURL(fromJSON: #"{"meta":{"version":"PTDL_v2"}}"#) == nil)
+        #expect(EggParser.updateURL(fromJSON: #"{"meta":{"update_url":"ftp://x/e.json"}}"#) == nil)
+        #expect(EggParser.updateURL(fromJSON: #"{"meta":{"update_url":""}}"#) == nil)
+    }
+
     @Test func serverRecordRoundTripsWithLimits() throws {
         let s = try store()
         let user = try s.createUser(username: "owner", passwordHash: "h", isAdmin: false)

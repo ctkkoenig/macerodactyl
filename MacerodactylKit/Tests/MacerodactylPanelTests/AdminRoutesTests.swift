@@ -327,6 +327,22 @@ import Testing
         }
     }
 
+    @Test func eggUpdateRejectsAnEggWithNoSource() async throws {
+        let h = try await makeHarness()
+        try await h.app.test(.router) { client in
+            let token = try await login(client, "admin", h.adminPassword)
+            // sampleEgg carries no meta.update_url.
+            let eggID = try await importEgg(client, token: token, nestName: "MC", json: sampleEgg)
+            try await client.execute(
+                uri: "/api/admin/eggs/\(eggID)/update", method: .post, headers: authed(token)
+            ) { #expect($0.status == .badRequest) }
+            // A missing egg is 404.
+            try await client.execute(
+                uri: "/api/admin/eggs/99999/update", method: .post, headers: authed(token)
+            ) { #expect($0.status == .notFound) }
+        }
+    }
+
     @Test func generatesUDPAndBothProtocolAllocations() async throws {
         let h = try await makeHarness()
         try await h.app.test(.router) { client in

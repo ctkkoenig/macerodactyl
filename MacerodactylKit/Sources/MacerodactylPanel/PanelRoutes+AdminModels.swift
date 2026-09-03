@@ -122,6 +122,8 @@ struct EggSummaryDTO: Encodable {
     let author: String?
     let description: String?
     let metaVersion: String?
+    /// True when the egg declares an upstream it can be refreshed from.
+    let updatable: Bool
     init(_ e: StoredEgg) {
         id = e.id
         nestId = e.nestID
@@ -129,6 +131,7 @@ struct EggSummaryDTO: Encodable {
         author = e.author
         description = e.eggDescription
         metaVersion = e.metaVersion
+        updatable = EggParser.updateURL(fromJSON: e.rawJSON) != nil
     }
 }
 
@@ -156,6 +159,8 @@ struct EggDetailDTO: Encodable {
     let metaVersion: String?
     let startup: String
     let hasInstallScript: Bool
+    /// The upstream source this egg can be refreshed from, if it declares one.
+    let updateUrl: String?
     let images: [EggImageDTO]
     let variables: [EggVariableDTO]
     init(stored: StoredEgg, egg: PterodactylEgg) {
@@ -167,6 +172,7 @@ struct EggDetailDTO: Encodable {
         metaVersion = egg.metaVersion
         startup = egg.startup
         hasInstallScript = egg.install.isRunnable
+        updateUrl = EggParser.updateURL(fromJSON: stored.rawJSON)?.absoluteString
         images = egg.dockerImages.map { EggImageDTO(label: $0.label, image: $0.image) }
         variables = egg.variables.map {
             EggVariableDTO(

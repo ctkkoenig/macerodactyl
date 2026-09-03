@@ -4,6 +4,13 @@ import HummingbirdAuth
 import MacerodactylKit
 import NIOCore
 
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+
+/// Failures while fetching an egg from its `update_url`.
+enum EggFetchError: Error { case httpStatus(Int), tooLarge }
+
 // The Pterodactyl-style admin API. Every route here lives under `/api/admin` and
 // is gated by `RequireAdmin` (404 to non-admins, hiding the surface entirely).
 // Mutations inherit the global CSRF check. This is UI-only — there is no public
@@ -38,6 +45,7 @@ extension PanelRoutes {
         admin.get("eggs/:id", use: apiAdminEggDetail)
         admin.post("eggs/import", use: apiAdminEggImport)
         admin.get("eggs/:id/export", use: apiAdminEggExport)
+        admin.post("eggs/:id/update", use: apiAdminEggUpdate)
         admin.delete("eggs/:id", use: apiAdminEggDelete)
 
         admin.get("servers", use: apiAdminServersList)
@@ -301,6 +309,46 @@ extension PanelRoutes {
         audit(
             user: user.username, action: "admin.egg.import", outcome: "ok", ip: context.clientIP, detail: egg.name)
         return encode(ImportResultDTO(eggId: eggID, name: egg.name, warnings: warnings))
+    }
+
+    /// Re-fetches an egg from its declared `meta.update_url` and overwrites it in
+    /// place (same id). Admin-only; only http(s) URLs the egg itself declares are
+    /// fetched, and the download is size- and time-bounded.
+    @Sendable func apiAdminEggUpdate(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let id = try requireInt(context, "id")
+        guard let stored = try store.egg(id: id) else { throw notFound() }
+        guard let url = EggParser.updateURL(fromJSON: stored.rawJSON) else {
+            return json(["error": "this egg has no update source (meta.update_url)"], status: .badRequest)
+        }
+        let fetched: String
+        do {
+            fetched = try await Self.fetchText(url: url, maxBytes: 2_000_000, timeout: 15)
+        } catch {
+            return json(["error": "couldn't fetch the egg from \(url.absoluteString)"], status: .badGateway)
+        }
+        let egg: PterodactylEgg
+        do { egg = try EggParser.parse(fetched) } catch {
+            return json(["error": "the fetched file doesn't look like a valid egg export"], status: .badRequest)
+        }
+        let warnings = EggValidator.validate(egg).map(\.message)
+        try store.updateEgg(id: id, egg: egg, rawJSON: fetched)
+        audit(user: user.username, action: "admin.egg.update", outcome: "ok", ip: context.clientIP, detail: egg.name)
+        return encode(ImportResultDTO(eggId: id, name: egg.name, warnings: warnings))
+    }
+
+    /// A bounded host HTTP GET returning the body as text. Enforces http(s), a
+    /// byte cap, and a timeout so an egg update can't hang or exhaust memory.
+    static func fetchText(url: URL, maxBytes: Int, timeout: TimeInterval) async throws -> String {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = timeout
+        request.httpMethod = "GET"
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw EggFetchError.httpStatus(http.statusCode)
+        }
+        guard data.count <= maxBytes else { throw EggFetchError.tooLarge }
+        return String(decoding: data, as: UTF8.self)
     }
 
     @Sendable func apiAdminEggExport(_ request: Request, context: PanelRequestContext) async throws -> Response {

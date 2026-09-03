@@ -401,6 +401,47 @@ extension PanelDataStore {
         return eggID
     }
 
+    /// Overwrites an existing egg in place from a re-fetched export, keeping its
+    /// id (so provisioned servers keep referring to the same egg) and its nest.
+    /// Its variables are fully replaced — a variable dropped upstream goes away,
+    /// a new one appears — which is what "update from source" means.
+    public func updateEgg(id: Int64, egg: PterodactylEgg, rawJSON: String) throws {
+        let imagesJSON = Self.encodeJSON(egg.dockerImages.map { ["label": $0.label, "image": $0.image] }) ?? "[]"
+        let doneJSON = Self.encodeJSON(egg.doneStrings) ?? "[]"
+        let featuresJSON = Self.encodeJSON(egg.features) ?? "[]"
+        let denylistJSON = Self.encodeJSON(egg.fileDenylist) ?? "[]"
+        try db.run(
+            """
+            UPDATE eggs SET name = ?, author = ?, description = ?, meta_version = ?, docker_images_json = ?,
+                startup = ?, config_files = ?, done_strings_json = ?, config_logs = ?, config_stop = ?,
+                script_install = ?, script_container = ?, script_entrypoint = ?, features_json = ?,
+                file_denylist_json = ?, raw_json = ?
+            WHERE id = ?
+            """,
+            [
+                .text(egg.name), .text(egg.author), .text(egg.eggDescription), .text(egg.metaVersion),
+                .text(imagesJSON), .text(egg.startup), .text(egg.configFiles), .text(doneJSON),
+                .text(egg.configLogs), .text(egg.configStop), .text(egg.install.script),
+                .text(egg.install.container), .text(egg.install.entrypoint), .text(featuresJSON),
+                .text(denylistJSON), .text(rawJSON), .integer(id),
+            ])
+        try db.run("DELETE FROM egg_variables WHERE egg_id = ?", [.integer(id)])
+        for (index, variable) in egg.variables.enumerated() {
+            try db.run(
+                """
+                INSERT INTO egg_variables (egg_id, name, description, env_variable, default_value,
+                    user_viewable, user_editable, rules, sort)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    .integer(id), .text(variable.name), .text(variable.variableDescription),
+                    .text(variable.envVariable), .text(variable.defaultValue),
+                    .integer(variable.userViewable ? 1 : 0), .integer(variable.userEditable ? 1 : 0),
+                    .text(variable.rules.joined(separator: "|")), .integer(Int64(index)),
+                ])
+        }
+    }
+
     public func listEggs(nestID: Int64? = nil) throws -> [StoredEgg] {
         let rows: [[String: SQLValue]]
         if let nestID {
