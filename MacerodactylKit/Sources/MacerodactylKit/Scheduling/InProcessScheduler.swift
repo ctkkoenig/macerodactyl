@@ -106,21 +106,56 @@ public actor InProcessScheduler {
     private let store: PanelDataStore
     private let calendar: Calendar
     private let now: @Sendable () -> Date
-    private let restart: @Sendable (String) async -> ScheduleFireOutcome
+    /// Runs ONE task of a chain (power / console command / backup). Injected from
+    /// the daemon, which maps it onto the docker CLI + panel services.
+    private let runTask: @Sendable (String, ScheduleTask) async -> ScheduleFireOutcome
+    /// The inter-task wait. Injectable so tests make offsets instant.
+    private let sleeper: @Sendable (Int) async -> Void
     /// Per-container "yyyy-MM-dd HH:mm" of the last minute we fired in, so the
-    /// multiple wakeups within one minute fire the restart only once.
+    /// multiple wakeups within one minute fire the chain only once.
     private var lastFiredMinute: [String: String] = [:]
+    /// Containers whose task chain is currently running. A chain runs detached so
+    /// a long step (a backup, a wait) never blocks the tick loop — which would
+    /// otherwise stall other schedules and make reconcile mis-report them as
+    /// missed. reconcile skips these; a schedule isn't fired again while in flight.
+    private var inFlight: Set<String> = []
+    private var runningChains: [String: Task<Void, Never>] = [:]
 
+    public init(
+        store: PanelDataStore,
+        calendar: Calendar = .current,
+        now: @escaping @Sendable () -> Date = { Date() },
+        sleeper: @escaping @Sendable (Int) async -> Void = { seconds in
+            try? await Task.sleep(nanoseconds: UInt64(max(seconds, 0)) * 1_000_000_000)
+        },
+        runTask: @escaping @Sendable (String, ScheduleTask) async -> ScheduleFireOutcome
+    ) {
+        self.store = store
+        self.calendar = calendar
+        self.now = now
+        self.sleeper = sleeper
+        self.runTask = runTask
+    }
+
+    /// Legacy convenience: a scheduler that only ever restarts (used where task
+    /// chains don't apply / in tests). Any task resolves to the restart action.
     public init(
         store: PanelDataStore,
         calendar: Calendar = .current,
         now: @escaping @Sendable () -> Date = { Date() },
         restart: @escaping @Sendable (String) async -> ScheduleFireOutcome
     ) {
-        self.store = store
-        self.calendar = calendar
-        self.now = now
-        self.restart = restart
+        self.init(
+            store: store, calendar: calendar, now: now,
+            sleeper: { _ in },  // no real waits on the restart-only path
+            runTask: { name, _ in await restart(name) })
+    }
+
+    /// Awaits every in-flight chain — for a clean shutdown (drain running chains
+    /// before the process exits) and for deterministic tests (assert on recorded
+    /// outcomes after the chains a tick launched have finished).
+    public func awaitInFlight() async {
+        for task in Array(runningChains.values) { await task.value }
     }
 
     private func minuteKey(_ date: Date) -> String {
@@ -130,8 +165,10 @@ public actor InProcessScheduler {
     }
 
     /// One evaluation pass: first surface any fire missed while the daemon was
-    /// down, then fire every schedule due at `date` that hasn't already fired this
-    /// minute, recording each outcome. Returns the containers fired.
+    /// down, then LAUNCH the task chain for every schedule due at `date` that
+    /// hasn't already fired this minute and isn't still running. Chains run
+    /// detached; this returns the containers whose chain it started (not their
+    /// outcomes — those are recorded when each chain finishes).
     @discardableResult
     public func tick(at date: Date) async -> [String] {
         reconcileMissedRuns(now: date)
@@ -142,26 +179,80 @@ public actor InProcessScheduler {
         let key = minuteKey(date)
         var fired: [String] = []
         for schedule in schedules {
+            let name = schedule.containerName
             guard
                 ScheduleEvaluator.isDue(
                     scheduleHour: schedule.hour, scheduleMinute: schedule.minute, weekdays: schedule.weekdays,
                     nowHour: nowHour, nowMinute: nowMinute, calendarWeekday: weekday)
             else { continue }
-            if lastFiredMinute[schedule.containerName] == key { continue }  // already fired this minute
-            lastFiredMinute[schedule.containerName] = key
-            let outcome = await restart(schedule.containerName)
-            try? store.recordScheduleRun(
-                containerName: schedule.containerName, at: iso(date), outcome: outcome.dbOutcome,
-                message: outcome.message)
-            // A durable audit entry too, so every scheduled restart shows in the
-            // server's Activity log — not just the transient last-run on the row.
-            try? store.recordAudit(
-                username: "scheduler", action: "container.schedules", containerName: schedule.containerName,
-                outcome: outcome.dbOutcome == "ok" ? "ok" : "error", sourceIP: nil,
-                detail: "scheduled restart: \(outcome.message)")
-            fired.append(schedule.containerName)
+            if lastFiredMinute[name] == key { continue }  // already fired this minute
+            if inFlight.contains(name) { continue }  // a previous fire's chain still running
+            lastFiredMinute[name] = key
+            // The chain, or the implicit single restart when none is configured.
+            let stored = (try? store.scheduleTasks(containerName: name)) ?? []
+            let chain = stored.isEmpty ? [ScheduleTask(seq: 0, action: .power, payload: "restart")] : stored
+            inFlight.insert(name)
+            runningChains[name] = Task { [weak self] in await self?.fireChain(name: name, tasks: chain, at: date) }
+            fired.append(name)
         }
         return fired
+    }
+
+    /// Runs one schedule's task chain in order (waiting each task's offset first),
+    /// then records a single outcome + audit entry for the whole fire.
+    private func fireChain(name: String, tasks: [ScheduleTask], at date: Date) async {
+        defer {
+            inFlight.remove(name)
+            runningChains[name] = nil
+        }
+        // A single task records its PRECISE outcome, so the legacy restart still
+        // reports "timedOut" distinctly (the UI shows the stale-socket hint).
+        if tasks.count == 1 {
+            let task = tasks[0]
+            if task.offsetSeconds > 0 { await sleeper(task.offsetSeconds) }
+            let outcome = await runTask(name, task)
+            let isRestart = task.action == .power && task.payload == "restart"
+            let message =
+                switch outcome {
+                case .success(let m): isRestart ? "restarted \(name)" : m
+                case .failed(let m), .timedOut(let m): m
+                }
+            record(name: name, date: date, dbOutcome: outcome.dbOutcome, message: message)
+            return
+        }
+        // A multi-task chain runs to the end and aggregates: ok only if every step
+        // succeeded, otherwise a failure summarizing which steps failed.
+        var failures: [String] = []
+        for task in tasks {
+            if task.offsetSeconds > 0 { await sleeper(task.offsetSeconds) }
+            let outcome = await runTask(name, task)
+            if case .success = outcome {} else { failures.append("\(taskLabel(task)) — \(outcome.message)") }
+        }
+        let n = tasks.count
+        if failures.isEmpty {
+            record(name: name, date: date, dbOutcome: "ok", message: "ran \(n) tasks")
+        } else {
+            record(
+                name: name, date: date, dbOutcome: "failed",
+                message: "\(failures.count) of \(n) tasks failed — \(failures.joined(separator: "; "))")
+        }
+    }
+
+    /// Records a fire's outcome to the schedule row and a durable audit entry, so
+    /// scheduled runs show in the server's Activity log — not just the row.
+    private func record(name: String, date: Date, dbOutcome: String, message: String) {
+        try? store.recordScheduleRun(containerName: name, at: iso(date), outcome: dbOutcome, message: message)
+        try? store.recordAudit(
+            username: "scheduler", action: "container.schedules", containerName: name,
+            outcome: dbOutcome == "ok" ? "ok" : "error", sourceIP: nil, detail: "scheduled run: \(message)")
+    }
+
+    private func taskLabel(_ task: ScheduleTask) -> String {
+        switch task.action {
+        case .power: "power \(task.payload)"
+        case .command: "command"
+        case .backup: "backup"
+        }
     }
 
     /// Detects and surfaces a fire the daemon MISSED because it wasn't running at
@@ -175,6 +266,9 @@ public actor InProcessScheduler {
     private func reconcileMissedRuns(now: Date) {
         let schedules = (try? store.listSchedules()) ?? []
         for schedule in schedules {
+            // A schedule whose chain is running right now hasn't missed anything —
+            // its outcome just hasn't been recorded yet (chains run detached).
+            if inFlight.contains(schedule.containerName) { continue }
             // Only a schedule that already existed can have missed a fire; an
             // unknown creation time (shouldn't happen post-migration) is not
             // flagged rather than risk a false alarm.

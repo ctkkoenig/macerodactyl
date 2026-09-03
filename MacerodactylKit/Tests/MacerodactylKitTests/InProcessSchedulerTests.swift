@@ -88,6 +88,7 @@ import Testing
         let t2 = date("2026-09-03T04:30:45Z")
         #expect(await scheduler.tick(at: t1) == ["bot"])
         #expect(await scheduler.tick(at: t2) == [])  // already fired this minute
+        await scheduler.awaitInFlight()  // let the detached chain finish
         #expect(await fireCount.total == 1)
 
         // The run was recorded.
@@ -97,6 +98,7 @@ import Testing
         // day's 04:30 fires again.
         #expect(await scheduler.tick(at: date("2026-09-03T04:31:00Z")) == [])
         #expect(await scheduler.tick(at: date("2026-09-04T04:30:10Z")) == ["bot"])
+        await scheduler.awaitInFlight()
         #expect(await fireCount.total == 2)
     }
 
@@ -113,6 +115,7 @@ import Testing
             })
         #expect(await scheduler.tick(at: date("2026-09-03T08:00:00Z")) == [])  // Thursday
         #expect(await scheduler.tick(at: date("2026-09-04T08:00:00Z")) == ["bot"])  // Friday
+        await scheduler.awaitInFlight()
         #expect(await fireCount.total == 1)
     }
 
@@ -161,6 +164,7 @@ import Testing
             store: store, calendar: utcCalendar, restart: { _ in .success("ok") })
         // Ticking exactly at 03:00 fires normally and is NOT reported as missed.
         #expect(await scheduler.tick(at: date("2099-06-15T03:00:00Z")) == ["bot"])
+        await scheduler.awaitInFlight()
         let audit = try store.listAudit(containerName: "bot")
         #expect(audit.contains { $0.action == "container.schedules" && $0.outcome == "ok" })
         #expect(!audit.contains { $0.outcome == "missed" })
@@ -236,7 +240,66 @@ import Testing
             store: store, calendar: utcCalendar,
             restart: { _ in .timedOut("hung") })
         #expect(await scheduler.tick(at: date("2026-09-03T01:00:00Z")) == ["bot"])
+        await scheduler.awaitInFlight()
         #expect(try store.schedule(containerName: "bot")?.lastOutcome == "timedOut")
+    }
+
+    @Test func runsATaskChainInOrder() async throws {
+        let store = try store()
+        try store.upsertSchedule(containerName: "bot", hour: 2, minute: 0, weekdays: [])
+        try store.setScheduleTasks(
+            containerName: "bot",
+            tasks: [
+                ScheduleTask(seq: 0, action: .command, payload: "say restarting", offsetSeconds: 0),
+                ScheduleTask(seq: 1, action: .backup, payload: "", offsetSeconds: 30),
+                ScheduleTask(seq: 2, action: .power, payload: "restart", offsetSeconds: 5),
+            ])
+        let log = TaskLog()
+        let scheduler = InProcessScheduler(
+            store: store, calendar: utcCalendar, sleeper: { _ in },  // offsets instant
+            runTask: { name, task in
+                await log.record("\(task.action.rawValue):\(task.payload)")
+                return .success("did \(task.action.rawValue)")
+            })
+        #expect(await scheduler.tick(at: date("2099-06-15T02:00:00Z")) == ["bot"])
+        await scheduler.awaitInFlight()
+        // Ran every task, in order.
+        #expect(await log.entries == ["command:say restarting", "backup:", "power:restart"])
+        #expect(try store.schedule(containerName: "bot")?.lastOutcome == "ok")
+        #expect(try store.schedule(containerName: "bot")?.lastMessage == "ran 3 tasks")
+    }
+
+    @Test func aFailedTaskMakesTheChainFailButRunsTheRest() async throws {
+        let store = try store()
+        try store.upsertSchedule(containerName: "bot", hour: 2, minute: 0, weekdays: [])
+        try store.setScheduleTasks(
+            containerName: "bot",
+            tasks: [
+                ScheduleTask(seq: 0, action: .command, payload: "warn", offsetSeconds: 0),
+                ScheduleTask(seq: 1, action: .backup, payload: "", offsetSeconds: 0),
+                ScheduleTask(seq: 2, action: .power, payload: "restart", offsetSeconds: 0),
+            ])
+        let log = TaskLog()
+        let scheduler = InProcessScheduler(
+            store: store, calendar: utcCalendar, sleeper: { _ in },
+            runTask: { name, task in
+                await log.record(task.action.rawValue)
+                return task.action == .backup ? .failed("disk full") : .success("ok")
+            })
+        _ = await scheduler.tick(at: date("2099-06-15T02:00:00Z"))
+        await scheduler.awaitInFlight()
+        // The restart still ran after the backup failed.
+        #expect(await log.entries == ["command", "backup", "power"])
+        let row = try #require(try store.schedule(containerName: "bot"))
+        #expect(row.lastOutcome == "failed")
+        #expect(row.lastMessage?.contains("1 of 3") == true)
+        #expect(row.lastMessage?.contains("disk full") == true)
+    }
+
+    /// Records the tasks a chain executed, in order.
+    private actor TaskLog {
+        private(set) var entries: [String] = []
+        func record(_ e: String) { entries.append(e) }
     }
 
     /// A tiny actor to count restart invocations across the concurrent closure.

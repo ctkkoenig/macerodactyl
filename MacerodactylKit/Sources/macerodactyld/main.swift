@@ -43,19 +43,34 @@ if (try? AccountManager(store: store).hasAnyUser()) == false {
 let containers = DaemonContainerService(cli: cli, stacksRoot: config.stacksRootURL, store: store)
 let server = PanelServer(store: store, containers: containers)
 
-// Cross-platform scheduled restarts. launchd does not exist on this (Linux)
+// Cross-platform scheduled task chains. launchd does not exist on this (Linux)
 // host, so the DB-backed schedules the web writes are fired by an in-process
-// cron loop instead. Restart-only — this never starts a container at boot;
-// compose restart policies own that. Each restart runs under a hard deadline so
-// a hung docker (stale socket) is recorded as a timeout, not awaited forever.
-let scheduler = InProcessScheduler(store: store) { name in
-    do {
-        _ = try await cli.run(["restart", name], timeout: .seconds(60))
-        return .success("restarted \(name)")
-    } catch DockerError.timeout {
-        return .timedOut("docker restart \(name) timed out (the daemon may be down or the socket is stale)")
-    } catch {
-        return .failed("docker restart \(name) failed: \(error)")
+// cron loop. A schedule runs its ordered chain — power / console command /
+// backup — or, with no chain, the implicit single restart. This never starts a
+// container at boot (compose restart policies own that); the daemon only acts on
+// a schedule's own tasks. Power runs under a hard deadline so a hung docker
+// (stale socket) is recorded as a timeout, not awaited forever.
+let scheduler = InProcessScheduler(store: store) { name, task in
+    switch task.action {
+    case .power:
+        do {
+            _ = try await cli.run([task.payload, name], timeout: .seconds(60))
+            return .success("\(task.payload) \(name)")
+        } catch DockerError.timeout {
+            return .timedOut("docker \(task.payload) \(name) timed out (the daemon may be down or the socket is stale)")
+        } catch {
+            return .failed("docker \(task.payload) \(name) failed: \(error)")
+        }
+    case .command:
+        let ok = await containers.consoleSend(containerName: name, line: task.payload)
+        return ok ? .success("sent to console") : .failed("the server isn't running / has no console")
+    case .backup:
+        do {
+            _ = try await containers.createBackup(containerName: name)
+            return .success("backed up \(name)")
+        } catch {
+            return .failed("backup failed: \(error)")
+        }
     }
 }
 let schedulerTask = Task { await scheduler.run() }
@@ -90,6 +105,7 @@ do {
     // record of a restart it was in the middle of firing).
     schedulerTask.cancel()
     _ = await schedulerTask.value
+    await scheduler.awaitInFlight()  // let any running chain finish recording
 } catch {
     schedulerTask.cancel()
     fail("server error: \(error)")
