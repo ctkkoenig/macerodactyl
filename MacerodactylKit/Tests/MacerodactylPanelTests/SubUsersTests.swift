@@ -142,6 +142,35 @@ import Testing
         }
     }
 
+    @Test func activityIsScopedToTheContainerAndHidesIPs() async throws {
+        let h = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, power: true))
+        try h.store.recordAudit(
+            username: "scoped", action: "container.power", containerName: "bot", outcome: "ok",
+            sourceIP: "10.0.0.9", detail: "start")
+        try h.store.recordAudit(
+            username: "admin", action: "container.power", containerName: "secret", outcome: "ok",
+            sourceIP: "10.0.0.9", detail: "stop")
+        try await h.app.test(.router) { client in
+            let token = try #require(try await base.login(client, username: "scoped", password: h.scopedPassword).cookie)
+            try await client.execute(
+                uri: "/api/containers/bot/activity", method: .get, headers: authed(token, csrf: false)
+            ) { response in
+                #expect(response.status == .ok)
+                let arr = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [[String: Any]]
+                // Only this container's entry, and no source IP leaked to the client.
+                #expect(arr.count == 1)
+                #expect(arr[0]["detail"] as? String == "start")
+                #expect(arr[0]["user"] as? String == "scoped")
+                #expect(arr[0]["sourceIP"] == nil && arr[0]["ip"] == nil)
+            }
+            // A container the caller can't view stays invisible (404), so its
+            // activity never surfaces.
+            try await client.execute(
+                uri: "/api/containers/secret/activity", method: .get, headers: authed(token, csrf: false)
+            ) { #expect($0.status == .notFound) }
+        }
+    }
+
     @Test func adminCanManageServerTheyDoNotOwn() async throws {
         let (h, friend, _) = try await makeOwnedHarness()
         try await h.app.test(.router) { client in

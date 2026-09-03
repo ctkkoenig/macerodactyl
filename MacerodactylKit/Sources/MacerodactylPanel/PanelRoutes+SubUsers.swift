@@ -145,6 +145,29 @@ extension PanelRoutes {
         return json(["ok": true])
     }
 
+    // MARK: Activity log
+
+    struct ActivityDTO: Encodable {
+        let at: String
+        let user: String
+        let action: String
+        let outcome: String
+        let detail: String?
+    }
+
+    /// This server's recent activity, newest first — who did what and whether it
+    /// succeeded. Gated on `view` by the scope middleware. Source IPs are
+    /// deliberately omitted: they stay in the admin-only native audit view.
+    @Sendable func apiActivity(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        _ = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        let entries = (try? store.listAudit(containerName: name, limit: 200)) ?? []
+        return encode(
+            entries.map {
+                ActivityDTO(at: $0.timestamp, user: $0.username, action: $0.action, outcome: $0.outcome, detail: $0.detail)
+            })
+    }
+
     // MARK: Remove
 
     @Sendable func apiSubUserRemove(_ request: Request, context: PanelRequestContext) async throws -> Response {

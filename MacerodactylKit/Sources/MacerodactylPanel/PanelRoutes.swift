@@ -108,6 +108,10 @@ struct PanelRoutes {
         scoped.get(":name/subusers", use: apiSubUsersList)
         scoped.put(":name/subusers", use: apiSubUserSet)
         scoped.delete(":name/subusers/:username", use: apiSubUserRemove)
+
+        // This server's activity log (view-gated; visible to everyone who can
+        // see the server, source IPs withheld from the client view).
+        scoped.get(":name/activity", use: apiActivity)
         // Destructive lifecycle — all gated on the `.lifecycle` permission via
         // the scope middleware's path mapping. Mutating, so CSRF-protected.
         scoped.post(":name/pull", use: apiPull)

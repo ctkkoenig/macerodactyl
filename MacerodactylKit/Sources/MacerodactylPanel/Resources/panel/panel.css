@@ -134,6 +134,14 @@ h2.section { font-size:12px; letter-spacing:.6px; text-transform:uppercase; colo
 .permrow:last-child { border-bottom:0; }
 .permrow input[type=checkbox] { width:20px; height:20px; accent-color:var(--accent); }
 .permrow input:disabled + span { color:var(--muted); }
+.alist { display:flex; flex-direction:column; margin-top:6px; }
+.arow { display:flex; gap:11px; align-items:flex-start; padding:11px 4px; border-bottom:1px solid var(--line); }
+.arow:last-child { border-bottom:0; }
+.arow .aic { flex:0 0 auto; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13px; }
+.arow .aic.ok { background:color-mix(in srgb, var(--accent) 18%, transparent); color:var(--accent); }
+.arow .aic.bad { background:color-mix(in srgb, var(--red) 18%, transparent); color:var(--red); }
+.arow .abody { min-width:0; }
+.arow .abody > div:first-child { font-size:14px; word-break:break-word; }
 .fail { color:var(--red); } .okrun { color:var(--muted); } .timeout { color:var(--amber); }
 h2 { font-size:15px; color:var(--fg2); font-weight:600; margin:18px 2px 8px; }
 

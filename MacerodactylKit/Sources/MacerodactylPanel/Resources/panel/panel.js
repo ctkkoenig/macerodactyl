@@ -248,6 +248,7 @@ window.enter = async function (name) {
   if (p.backups) tabs.push(['backups', 'Backups', '⤓']);
   if (p.schedules) tabs.push(['schedules', 'Schedules', '⏱']);
   if (detail.canManageSubusers) tabs.push(['users', 'Users', '⚇']);
+  tabs.push(['activity', 'Activity', '◷']);
   tabbar.hidden = false;
   tabbar.replaceChildren(...tabs.map(t => h('button', { class: 'navitem', 'data-t': t[0], onclick: () => setTab(t[0]) },
     h('span', { class: 'tile', text: t[2] }), h('span', { class: 'lbl', text: t[1] }))));
@@ -317,6 +318,7 @@ function render() {
   else if (tab === 'backups') { parts.push(h('div', { id: 'backups' }, 'Loading…')); }
   else if (tab === 'schedules') { parts.push(h('div', { id: 'sched' }, 'Loading…')); }
   else if (tab === 'users') { parts.push(h('div', { id: 'users' }, 'Loading…')); }
+  else if (tab === 'activity') { parts.push(h('div', { id: 'activity' }, 'Loading…')); }
   show(parts);
   if (tab === 'logs') startLogs();
   if (tab === 'console') { bindConsole(); startConsole(); }
@@ -325,6 +327,7 @@ function render() {
   if (tab === 'backups') loadBackups();
   if (tab === 'schedules') loadSchedule();
   if (tab === 'users') loadSubusers();
+  if (tab === 'activity') loadActivity();
 }
 
 // --- console + power + lifecycle -------------------------------------------
@@ -526,6 +529,26 @@ async function removeSubuser(u) {
   if (!confirm('Remove ' + u.username + ' from this server? They will lose all access to it.')) return;
   try { await fetch(api('/subusers/' + enc(u.username)), { method: 'DELETE', headers: CSRF }); } catch (e) {}
   loadSubusers();
+}
+
+// --- activity (this server's audit trail, client-visible) -------------------
+const ACTION_LABELS = { 'container.view': 'Viewed', 'container.power': 'Power', 'container.files': 'Files', 'container.console': 'Console', 'container.schedules': 'Schedule', 'container.lifecycle': 'Lifecycle', 'container.backups': 'Backup', 'container.subuser': 'Sub-user', 'container.logs': 'Logs', 'container.stats': 'Stats', 'admin.server.edit': 'Edited (admin)', 'admin.server.suspend': 'Suspended (admin)', 'admin.server.unsuspend': 'Unsuspended (admin)', 'admin.server.reinstall': 'Reinstalled (admin)', 'admin.server.create': 'Created (admin)' };
+async function loadActivity() {
+  const host = document.getElementById('activity'); if (!host) return;
+  host.replaceChildren(msg('Loading…'));
+  try {
+    const list = await jget(api('/activity'));
+    if (!list.length) { host.replaceChildren(msg('No activity recorded yet.')); return; }
+    const rows = list.map(a => {
+      const bad = a.outcome === 'denied' || a.outcome === 'error';
+      return h('div', { class: 'arow' },
+        h('span', { class: 'aic ' + (bad ? 'bad' : 'ok'), text: a.outcome === 'denied' ? '⊘' : bad ? '!' : '✓' }),
+        h('div', { class: 'abody' },
+          h('div', { text: (ACTION_LABELS[a.action] || a.action) + (a.detail ? ' — ' + a.detail : '') }),
+          h('div', { class: 'sub', text: a.user + ' · ' + (a.at || '').replace('T', ' ').replace(/\..*/, '') })));
+    });
+    host.replaceChildren(h('div', { class: 'alist' }, ...rows));
+  } catch (e) { host.replaceChildren(msg('Failed to load activity.', true)); }
 }
 
 // --- logs (stream + search + download) --------------------------------------

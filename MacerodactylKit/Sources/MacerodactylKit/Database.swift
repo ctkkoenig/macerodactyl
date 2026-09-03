@@ -747,6 +747,26 @@ public final class PanelDataStore: Sendable {
         )
     }
 
+    /// Audit entries for one container, newest first — the source of a server's
+    /// client-visible activity log. Filters on the recorded container name.
+    public func listAudit(containerName: String, limit: Int = 200) throws -> [AuditEntry] {
+        try db.query(
+            "SELECT * FROM audit WHERE container_name = ? ORDER BY id DESC LIMIT ?",
+            [.text(containerName), .integer(Int64(limit))]
+        ).map { row in
+            AuditEntry(
+                id: row["id"]?.asInt ?? 0,
+                timestamp: row["ts"]?.asString ?? "",
+                username: row["username"]?.asString ?? "",
+                action: row["action"]?.asString ?? "",
+                containerName: row["container_name"]?.asString,
+                outcome: row["outcome"]?.asString ?? "",
+                sourceIP: row["source_ip"]?.asString,
+                detail: row["detail"]?.asString
+            )
+        }
+    }
+
     public func listAudit(limit: Int = 500) throws -> [AuditEntry] {
         try db.query("SELECT * FROM audit ORDER BY id DESC LIMIT ?", [.integer(Int64(limit))]).map { row in
             AuditEntry(
