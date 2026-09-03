@@ -277,6 +277,44 @@ extension PanelDataStore {
             [.text(serverName)])
     }
 
+    // MARK: Per-allocation assignment (client-managed networking)
+
+    /// Assigns one currently-free allocation to a server. Returns false if the
+    /// allocation doesn't exist or is already taken (the WHERE guards the claim,
+    /// and the DB lock serializes it so two clients can't grab the same row).
+    @discardableResult
+    public func assignAllocation(id: Int64, toServer serverName: String) throws -> Bool {
+        try db.run(
+            "UPDATE allocations SET server_name = ? WHERE id = ? AND server_name IS NULL",
+            [.text(serverName), .integer(id)])
+        return try allocationOwner(id: id) == serverName
+    }
+
+    /// Releases one allocation from a server (only if it belongs to it and isn't
+    /// the primary — the primary is released only when the server is deprovisioned).
+    /// Returns false if it isn't the server's, or is its primary.
+    @discardableResult
+    public func releaseAllocation(id: Int64, fromServer serverName: String) throws -> Bool {
+        try db.run(
+            "UPDATE allocations SET server_name = NULL WHERE id = ? AND server_name = ? AND is_primary = 0",
+            [.integer(id), .text(serverName)])
+        return try allocationOwner(id: id) == nil
+    }
+
+    /// Makes one of a server's allocations its primary, clearing the flag on its
+    /// siblings. Returns false if the allocation isn't assigned to that server.
+    @discardableResult
+    public func setPrimaryAllocation(id: Int64, forServer serverName: String) throws -> Bool {
+        guard try allocationOwner(id: id) == serverName else { return false }
+        try db.run("UPDATE allocations SET is_primary = 0 WHERE server_name = ?", [.text(serverName)])
+        try db.run("UPDATE allocations SET is_primary = 1 WHERE id = ? AND server_name = ?", [.integer(id), .text(serverName)])
+        return true
+    }
+
+    private func allocationOwner(id: Int64) throws -> String? {
+        try db.query("SELECT server_name FROM allocations WHERE id = ?", [.integer(id)]).first?["server_name"]?.asString
+    }
+
     private static func allocationFromRow(_ row: [String: SQLValue]) -> PortAllocation {
         PortAllocation(
             id: row["id"]!.asInt!,

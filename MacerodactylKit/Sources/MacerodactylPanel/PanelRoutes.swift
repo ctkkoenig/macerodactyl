@@ -120,6 +120,13 @@ struct PanelRoutes {
         // This server's activity log (view-gated; visible to everyone who can
         // see the server, source IPs withheld from the client view).
         scoped.get(":name/activity", use: apiActivity)
+
+        // Client-area network (allocation) management — owner/admin only,
+        // enforced in the handlers (the middleware maps these to `.view`).
+        scoped.get(":name/allocations", use: apiServerAllocationsList)
+        scoped.post(":name/allocations", use: apiServerAllocationAdd)
+        scoped.delete(":name/allocations/:allocId", use: apiServerAllocationRemove)
+        scoped.post(":name/allocations/:allocId/primary", use: apiServerAllocationPrimary)
         // Destructive lifecycle — all gated on the `.lifecycle` permission via
         // the scope middleware's path mapping. Mutating, so CSRF-protected.
         scoped.post(":name/pull", use: apiPull)

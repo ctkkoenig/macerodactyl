@@ -171,6 +171,32 @@ import Testing
         }
     }
 
+    @Test func allocationManagementIsOwnerOnly() async throws {
+        let (h, _, _) = try await makeOwnedHarness()
+        try await h.app.test(.router) { client in
+            // helper can view "bot" but does not own it → 403 on every alloc route.
+            let helper = try await token(client, h, "helper", "helper-pw-123456")
+            try await client.execute(uri: "/api/containers/bot/allocations", method: .get, headers: authed(helper, csrf: false)) {
+                #expect($0.status == .forbidden)
+            }
+            try await client.execute(
+                uri: "/api/containers/bot/allocations", method: .post, headers: authed(helper),
+                body: ByteBuffer(string: #"{"id":1}"#)
+            ) { #expect($0.status == .forbidden) }
+            try await client.execute(uri: "/api/containers/bot/allocations/1", method: .delete, headers: authed(helper)) {
+                #expect($0.status == .forbidden)
+            }
+            // The owner can at least list (empty — no egg-backed allocations here).
+            let owner = try await token(client, h, "scoped", h.scopedPassword)
+            try await client.execute(uri: "/api/containers/bot/allocations", method: .get, headers: authed(owner, csrf: false)) {
+                response in
+                #expect(response.status == .ok)
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                #expect(json["canManage"] as? Bool == true)
+            }
+        }
+    }
+
     @Test func adminCanManageServerTheyDoNotOwn() async throws {
         let (h, friend, _) = try await makeOwnedHarness()
         try await h.app.test(.router) { client in

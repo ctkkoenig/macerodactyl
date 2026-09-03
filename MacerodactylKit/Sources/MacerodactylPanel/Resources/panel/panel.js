@@ -248,6 +248,7 @@ window.enter = async function (name) {
   if (p.backups) tabs.push(['backups', 'Backups', '⤓']);
   if (p.schedules) tabs.push(['schedules', 'Schedules', '⏱']);
   if (detail.canManageSubusers) tabs.push(['users', 'Users', '⚇']);
+  if (detail.canManageSubusers) tabs.push(['network', 'Network', '⇄']);
   tabs.push(['activity', 'Activity', '◷']);
   tabbar.hidden = false;
   tabbar.replaceChildren(...tabs.map(t => h('button', { class: 'navitem', 'data-t': t[0], onclick: () => setTab(t[0]) },
@@ -331,6 +332,7 @@ function render() {
   else if (tab === 'backups') { parts.push(h('div', { id: 'backups' }, 'Loading…')); }
   else if (tab === 'schedules') { parts.push(h('div', { id: 'sched' }, 'Loading…')); }
   else if (tab === 'users') { parts.push(h('div', { id: 'users' }, 'Loading…')); }
+  else if (tab === 'network') { parts.push(h('div', { id: 'network' }, 'Loading…')); }
   else if (tab === 'activity') { parts.push(h('div', { id: 'activity' }, 'Loading…')); }
   show(parts);
   if (tab === 'logs') startLogs();
@@ -340,6 +342,7 @@ function render() {
   if (tab === 'backups') loadBackups();
   if (tab === 'schedules') loadSchedule();
   if (tab === 'users') loadSubusers();
+  if (tab === 'network') loadAllocations();
   if (tab === 'activity') loadActivity();
 }
 
@@ -542,6 +545,45 @@ async function removeSubuser(u) {
   if (!confirm('Remove ' + u.username + ' from this server? They will lose all access to it.')) return;
   try { await fetch(api('/subusers/' + enc(u.username)), { method: 'DELETE', headers: CSRF }); } catch (e) {}
   loadSubusers();
+}
+
+// --- network (client-managed port allocations) ------------------------------
+async function loadAllocations() {
+  const host = document.getElementById('network'); if (!host) return;
+  host.replaceChildren(msg('Loading…'));
+  try {
+    const d = await jget(api('/allocations'));
+    const arows = d.assigned.map(a => h('div', { class: 'brow' },
+      h('div', {}, h('div', { text: a.ip + ':' + a.port + '/' + a.proto }),
+        h('div', { class: 'sub', text: a.isPrimary ? 'Primary — the server binds this port' : 'Additional' })),
+      h('div', { class: 'bact' },
+        a.isPrimary ? null : h('button', { onclick: () => allocAction('POST', '/allocations/' + a.id + '/primary', 'Make ' + a.port + ' the primary port? The server will be recreated.') }, 'Make primary'),
+        a.isPrimary ? null : h('button', { class: 'rm', onclick: () => allocAction('DELETE', '/allocations/' + a.id, 'Remove port ' + a.port + '? The server will be recreated.') }, 'Remove'))));
+    const parts = [h('div', { class: 'subedit' },
+      h('h3', { text: 'Ports' }),
+      h('div', {}, ...(d.assigned.length ? arows : [msg('No ports assigned.')])),
+      h('div', { class: 'note', text: 'Changing ports recreates the container briefly. Up to ' + d.limit + ' ports per server.' }))];
+    if (d.assigned.length >= d.limit) parts.push(msg('This server is at its port limit.'));
+    else if (!d.available.length) parts.push(msg('No free ports available. Ask an admin to generate more.'));
+    else {
+      const sel = h('select', {}, ...d.available.slice(0, 250).map(a => h('option', { value: a.id }, a.ip + ':' + a.port + '/' + a.proto)));
+      parts.push(h('div', { class: 'toolrow' }, sel,
+        h('button', { onclick: () => allocAction('POST', '/allocations', 'Add this port? The server will be recreated.', { id: Number(sel.value) }) }, 'Add port')));
+    }
+    host.replaceChildren(...parts);
+  } catch (e) { host.replaceChildren(msg('Failed to load network.', true)); }
+}
+async function allocAction(method, suffix, confirmMsg, body) {
+  if (!confirm(confirmMsg)) return;
+  const host = document.getElementById('network');
+  if (host) host.prepend(msg('Applying… the server is being recreated.'));
+  try {
+    const opts = { method, headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF) };
+    if (body) opts.body = JSON.stringify(body);
+    const r = await fetch(api(suffix), opts);
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || 'The change failed.'); }
+  } catch (e) { alert('Request failed.'); }
+  loadAllocations();
 }
 
 // --- activity (this server's audit trail, client-visible) -------------------

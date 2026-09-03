@@ -68,6 +68,36 @@ import Testing
         #expect(try s.listAllocations().allSatisfy { $0.isFree })
     }
 
+    @Test func perAllocationAssignReleaseAndPrimary() throws {
+        let s = try store()
+        try s.generateAllocations(ip: "127.0.0.1", ports: Array(25565...25567))
+        let free = try s.listAllocations()
+        let a = free[0].id
+        let b = free[1].id
+
+        // Assign one → it's the server's; a second server can't take it.
+        #expect(try s.assignAllocation(id: a, toServer: "mc1") == true)
+        #expect(try s.assignAllocation(id: a, toServer: "other") == false)
+        try s.setPrimaryAllocation(id: a, forServer: "mc1")
+        #expect(try s.allocations(forServer: "mc1").first(where: \.isPrimary)?.id == a)
+
+        // Add a second, promote it → the flag moves.
+        #expect(try s.assignAllocation(id: b, toServer: "mc1") == true)
+        #expect(try s.setPrimaryAllocation(id: b, forServer: "mc1") == true)
+        let assigned = try s.allocations(forServer: "mc1")
+        #expect(assigned.first(where: \.isPrimary)?.id == b)
+        #expect(assigned.filter(\.isPrimary).count == 1)
+
+        // The primary can't be released; a non-primary can.
+        #expect(try s.releaseAllocation(id: b, fromServer: "mc1") == false)  // b is primary now
+        #expect(try s.releaseAllocation(id: a, fromServer: "mc1") == true)
+        #expect(try s.allocations(forServer: "mc1").map(\.id) == [b])
+        // Can't release another server's allocation.
+        #expect(try s.releaseAllocation(id: b, fromServer: "someoneelse") == false)
+        // setPrimary on an unowned allocation fails.
+        #expect(try s.setPrimaryAllocation(id: free[2].id, forServer: "mc1") == false)
+    }
+
     @Test func reserveThrowsWhenPoolExhausted() throws {
         let s = try store()
         try s.generateAllocations(ip: "127.0.0.1", ports: [25565])
