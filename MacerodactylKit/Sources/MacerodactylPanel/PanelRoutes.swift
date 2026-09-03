@@ -42,6 +42,9 @@ struct PanelRoutes {
         router.post("login", use: login)
         router.post("logout", use: logout)
         router.get("me", use: appPage)
+        // First-run web setup (only reachable while no account exists).
+        router.get("setup", use: setupPage)
+        router.post("setup", use: setupSubmit)
 
         // Static frontend assets (no secrets — this is the client code). Served
         // from a fixed allow-list, never a filename from the URL.
@@ -49,6 +52,7 @@ struct PanelRoutes {
         router.get("assets/panel.js", use: { req, _ in Self.asset(.panelJS, req) })
         router.get("assets/login.css", use: { req, _ in Self.asset(.loginCSS, req) })
         router.get("assets/login.js", use: { req, _ in Self.asset(.loginJS, req) })
+        router.get("assets/setup.js", use: { req, _ in Self.asset(.setupJS, req) })
         router.get("assets/admin.css", use: { req, _ in Self.asset(.adminCSS, req) })
         router.get("assets/admin.js", use: { req, _ in Self.asset(.adminJS, req) })
         // The admin SPA shell — a separate bundle from the phone panel. The HTML
@@ -130,12 +134,66 @@ struct PanelRoutes {
     // MARK: HTML pages
 
     @Sendable func root(_ request: Request, context: PanelRequestContext) async throws -> Response {
-        redirect(context.identity == nil ? "/login" : "/me")
+        if context.identity != nil { return redirect("/me") }
+        // A brand-new panel with no accounts sends the operator to web setup
+        // rather than a login form they can't yet satisfy.
+        if (try? store.hasAnyUser()) == false { return redirect("/setup") }
+        return redirect("/login")
     }
 
     @Sendable func loginPage(_ request: Request, context: PanelRequestContext) async throws -> Response {
         if context.identity != nil { return redirect("/me") }
+        if (try? store.hasAnyUser()) == false { return redirect("/setup") }
         return html(PanelAssets.string(.loginHTML))
+    }
+
+    // MARK: First-run setup (web-first admin bootstrap)
+
+    struct SetupBody: Decodable {
+        let username: String
+        let password: String
+    }
+
+    /// The setup page — only while the panel has no accounts. Once any account
+    /// exists it redirects to login, so it is never a second door in.
+    @Sendable func setupPage(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        guard (try? store.hasAnyUser()) == false else { return redirect("/login") }
+        return html(PanelAssets.string(.setupHTML))
+    }
+
+    /// Creates the first administrator and signs them in. Permanently closed the
+    /// instant any account exists — this is THE guard that keeps an unauthenticated
+    /// endpoint that mints an admin from ever being a takeover on a live panel.
+    @Sendable func setupSubmit(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        guard (try? store.hasAnyUser()) == false else {
+            return json(["error": "Setup is already complete. Sign in instead."], status: .forbidden)
+        }
+        guard let body = try? await request.decode(as: SetupBody.self, context: context) else {
+            return json(["error": "Invalid request"], status: .badRequest)
+        }
+        let username = body.username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard username.range(of: "^[a-zA-Z0-9._-]{1,32}$", options: .regularExpression) != nil else {
+            return json(["error": "Username: 1–32 characters, letters/digits/._-"], status: .badRequest)
+        }
+        guard body.password.count >= 8 else {
+            return json(["error": "Password must be at least 8 characters."], status: .badRequest)
+        }
+        let user: PanelUser
+        do {
+            user = try await AccountManager(store: store).createUser(
+                username: username, password: body.password, isAdmin: true)
+        } catch {
+            return json(["error": "Could not create the account."], status: .internalServerError)
+        }
+        let token = PanelSession.newToken()
+        let userAgent = request.headers[.userAgent].map { String($0.prefix(256)) }
+        try? store.insertSession(
+            tokenHash: PanelSession.hashToken(token), userID: user.id, expiresAt: PanelSession.expiry(),
+            ip: context.clientIP, userAgent: userAgent)
+        audit(user: user.username, action: "setup.create_admin", outcome: "ok", ip: context.clientIP)
+        var response = json(["ok": true])
+        response.setCookie(sessionCookie(token: token))
+        return response
     }
 
     @Sendable func appPage(_ request: Request, context: PanelRequestContext) async throws -> Response {

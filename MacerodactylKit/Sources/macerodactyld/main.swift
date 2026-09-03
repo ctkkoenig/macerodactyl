@@ -33,20 +33,11 @@ do { store = try PanelDataStore(databasePath: dbPath) } catch { fail("cannot ope
 var logger = Logger(label: "macerodactyld")
 logger.logLevel = .notice
 
-// First run: mint an admin if none exists so the panel is usable even when
-// launched daemon-first, dropping the one-time password in a 0600 file.
-// Idempotent — never disturbs existing accounts.
-if let created = try? await AccountManager(store: store).createFirstAdminIfNeeded() {
-    let creds = "username: \(created.username)\npassword: \(created.password)\n"
-    if let dir = try? AppPaths.supportDirectory() {
-        let url = dir.appending(path: "first-admin.txt")
-        // Create 0600 at creation time — no window where the one-time password
-        // is world-readable (createFile applies the mode as the file is made).
-        try? FileManager.default.removeItem(at: url)
-        FileManager.default.createFile(
-            atPath: url.path, contents: Data(creds.utf8), attributes: [.posixPermissions: 0o600])
-        logger.notice("created first admin — one-time password at \(url.path)")
-    }
+// First run: the operator creates the first admin through the browser (the panel
+// serves a setup page while no account exists) rather than fishing a password out
+// of an on-disk file. Just note where to go; never auto-mint an account here.
+if (try? AccountManager(store: store).hasAnyUser()) == false {
+    logger.notice("no accounts yet — open the panel and complete first-run setup to create the admin")
 }
 
 let containers = DaemonContainerService(cli: cli, stacksRoot: config.stacksRootURL, store: store)
