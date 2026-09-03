@@ -69,9 +69,9 @@ relax them without asking.
   (Cloudflare Access, Tailscale, X-Forwarded-*) — the audit trail requires an
   identity the app owns.
 - Per-user scoping is **the** security boundary: per container, separate view /
-  power / files / console / schedules / lifecycle permissions (6 total; each is
-  independent but all require view). `lifecycle` (pull/recreate/remove) is kept
-  separate from `power` so "can restart" never implies "can destroy". A scoped
+  power / files / console / schedules / lifecycle / backups permissions (7 total;
+  each is independent but all require view). `lifecycle` (pull/recreate/remove) is
+  kept separate from `power` so "can restart" never implies "can destroy". A scoped
   user sees *nothing* about ungranted containers — filtered lists, and 404 (not
   403) for ungranted IDs. File access is confined to that container's own stack
   folder (realpath + prefix check); containers with no compose working_dir under
