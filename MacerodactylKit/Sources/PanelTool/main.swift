@@ -108,11 +108,12 @@ case "provision":
     }
     let runtime = ServerRuntimeContext(memoryMiB: memoryMiB, port: port, uuid: UUID().uuidString)
     let resolved = VariableResolver.resolveStartup(egg: egg, values: [:], runtime: runtime)
+    let stop = ServerStop.from(configStop: egg.configStop)
     let spec = ProvisionSpec(
         name: serverName, image: image, startup: resolved.startup.value, environment: resolved.environment,
         install: egg.install, limits: ServerLimits(memoryMiB: memoryMiB),
         portMappings: [PortMapping(hostIP: "127.0.0.1", hostPort: port, containerPort: port)],
-        configFiles: egg.configFiles)
+        configFiles: egg.configFiles, stopSignal: stop.signal, stopGracePeriodSeconds: stop.graceSeconds)
     try FileManager.default.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
     print("Provisioning \"\(serverName)\" from \(egg.name) [\(image)] into \(scratchRoot.path)")
     let service = DaemonContainerService(cli: DockerCLI(binary: dockerURL), stacksRoot: scratchRoot)

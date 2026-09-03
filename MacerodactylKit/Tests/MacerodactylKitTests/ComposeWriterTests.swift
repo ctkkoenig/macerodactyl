@@ -65,6 +65,24 @@ import Testing
         #expect(yaml.contains("      - \"./data:/home/container\""))
     }
 
+    @Test func stopConfigMapping() {
+        #expect(ServerStop.from(configStop: "^C") == ServerStop(signal: "SIGINT", graceSeconds: 30))
+        #expect(ServerStop.from(configStop: "SIGTERM") == ServerStop(signal: "SIGTERM", graceSeconds: 30))
+        // Common console stop commands are commands, NOT the same-named signal.
+        #expect(ServerStop.from(configStop: "stop") == ServerStop(signal: nil, graceSeconds: 30, command: "stop"))
+        #expect(ServerStop.from(configStop: "quit") == ServerStop(signal: nil, graceSeconds: 30, command: "quit"))
+        #expect(ServerStop.from(configStop: "") == ServerStop())
+    }
+
+    @Test func composeEmitsStopSignalAndGrace() {
+        let spec = ProvisionSpec(
+            name: "mc", image: "img", startup: "run", environment: [:],
+            stopSignal: "SIGINT", stopGracePeriodSeconds: 30)
+        let yaml = ComposeFileWriter.compose(spec)
+        #expect(yaml.contains("    stop_signal: SIGINT"))
+        #expect(yaml.contains("    stop_grace_period: 30s"))
+    }
+
     @Test func unlimitedSwapEmitsMinusOne() {
         let spec = ProvisionSpec(
             name: "x", image: "img", startup: "run", environment: [:],

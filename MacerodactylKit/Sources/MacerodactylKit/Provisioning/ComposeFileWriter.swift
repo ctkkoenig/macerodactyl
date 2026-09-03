@@ -101,6 +101,14 @@ public enum ComposeFileWriter {
         lines.append("    entrypoint: [\"/bin/bash\", \"-c\"]")
         lines.append("    command: [\(yaml(spec.startup))]")
         lines.append("    restart: \(spec.restartPolicy)")
+        // Graceful shutdown from the egg's config.stop (T0.3): a specific signal
+        // and/or a longer grace window so a save completes before SIGKILL.
+        if let signal = spec.stopSignal, !signal.isEmpty {
+            lines.append("    stop_signal: \(signal)")
+        }
+        if let grace = spec.stopGracePeriodSeconds, grace > 0 {
+            lines.append("    stop_grace_period: \(grace)s")
+        }
 
         if !spec.environment.isEmpty {
             lines.append("    environment:")

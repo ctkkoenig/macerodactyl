@@ -332,9 +332,11 @@ extension PanelRoutes {
         let mappings = reserved.map {
             PortMapping(hostIP: $0.ip, hostPort: $0.port, containerPort: $0.port, proto: $0.proto)
         }
+        let stop = ServerStop.from(configStop: egg.configStop)
         let spec = ProvisionSpec(
             name: name, image: image, startup: resolved.startup.value, environment: resolved.environment,
-            install: egg.install, limits: limits, portMappings: mappings, configFiles: egg.configFiles)
+            install: egg.install, limits: limits, portMappings: mappings, configFiles: egg.configFiles,
+            stopSignal: stop.signal, stopGracePeriodSeconds: stop.graceSeconds)
 
         // Persist the record BEFORE streaming so a crash mid-install is visible.
         try? store.createServerRecord(
