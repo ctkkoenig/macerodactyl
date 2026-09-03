@@ -65,6 +65,65 @@ import Testing
         }
     }
 
+    // MARK: Startup done-detection (T8.3)
+
+    /// Links the running "bot" fixture to an egg that declares a `Done (` marker.
+    private func provisionBotWithDoneMarker(_ h: PanelServerTests.Harness) throws {
+        let raw = #"""
+            {"meta":{"version":"PTDL_v2"},"name":"MC","author":"a","description":"d",
+             "docker_images":{"J":"img"},"startup":"run {{SERVER_JARFILE}}",
+             "config":{"files":"{}","startup":"{\"done\":\"Done (\"}","logs":"{}","stop":"stop"},
+             "scripts":{"installation":{"script":"echo","container":"debian","entrypoint":"bash"}},
+             "variables":[{"name":"J","env_variable":"SERVER_JARFILE","default_value":"s.jar",
+               "user_viewable":true,"user_editable":true,"rules":"required"}]}
+            """#
+        let nestID = try h.store.createNest(name: "MC", author: nil, description: nil)
+        let eggID = try h.store.importEgg(try EggParser.parse(raw), rawJSON: raw, nestID: nestID)
+        try h.store.createServerRecord(
+            uuid: UUID().uuidString, name: "bot", eggID: eggID, dockerImage: "img", ownerUserID: nil,
+            limits: .init(memoryMiB: 256), startup: "run", values: [:], status: "active")
+    }
+
+    @Test func startupStateIsOnlineWhenTheDoneMarkerIsInTheLog() async throws {
+        let h = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        try provisionBotWithDoneMarker(h)
+        h.service.cannedLogHistory["bot"] = "Loading…\nDone (4.2s)! For help, type help"
+        h.service.cannedStartedAt["bot"] = Date()  // just started
+        try await h.app.test(.router) { client in
+            let token = try await loginToken(client, h)
+            try await client.execute(uri: "/api/containers/bot", method: .get, headers: headers(token)) { response in
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                #expect(json["startupState"] as? String == "online")
+            }
+        }
+    }
+
+    @Test func startupStateIsStartingBeforeTheMarkerAppears() async throws {
+        let h = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        try provisionBotWithDoneMarker(h)
+        h.service.cannedLogHistory["bot"] = "Loading libraries…\nPreparing world…"  // no marker yet
+        h.service.cannedStartedAt["bot"] = Date()  // fresh → not past the grace window
+        try await h.app.test(.router) { client in
+            let token = try await loginToken(client, h)
+            try await client.execute(uri: "/api/containers/bot", method: .get, headers: headers(token)) { response in
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                #expect(json["startupState"] as? String == "starting")
+            }
+        }
+    }
+
+    @Test func noStartupStateForAContainerWithoutADoneMarker() async throws {
+        // "bot" here has no server record/egg, so there is no startup phase to show.
+        let h = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        try await h.app.test(.router) { client in
+            let token = try await loginToken(client, h)
+            try await client.execute(uri: "/api/containers/bot", method: .get, headers: headers(token)) { response in
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                #expect(json["startupState"] == nil || json["startupState"] is NSNull)
+            }
+        }
+    }
+
     // MARK: Per-permission gating
 
     @Test func powerRequiresPowerPermission() async throws {

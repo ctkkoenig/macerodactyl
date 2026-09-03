@@ -583,6 +583,10 @@ struct PanelRoutes {
         let cpuCores: Double?
         /// Why a stopped container isn't running (crash / OOM). nil while running.
         let exit: ExitInfo?
+        /// For a running egg-server that declares a startup "done" marker:
+        /// "starting" until the marker appears (or the grace window passes),
+        /// then "online". nil when there's no marker / the state doesn't apply.
+        let startupState: String?
         struct Permissions: Encodable { let view, power, files, console, schedules, lifecycle, backups: Bool }
         struct ExitInfo: Encodable {
             let crashed: Bool
@@ -608,6 +612,15 @@ struct PanelRoutes {
                 crashed: info.crashed, reason: info.reason, exitCode: info.exitCode,
                 oomKilled: info.oomKilled, restartCount: info.restartCount, finishedAt: info.finishedAt)
         }
+        // A running egg-server that declares a "done" marker gets a startup probe:
+        // scan the recent log for the marker, with an uptime fallback so a
+        // long-running server whose marker scrolled away still reads as online.
+        var startupState: String?
+        if container.isRunning, let markers = try? startupMarkers(forContainer: name), !markers.isEmpty {
+            let log = await containers.logHistory(containerName: name, tail: 250, since: nil) ?? ""
+            let uptime = await containers.startedAt(containerName: name).map { Date().timeIntervalSince($0) }
+            startupState = StartupProbe.evaluate(logText: log, doneStrings: markers, uptimeSeconds: uptime).rawValue
+        }
         audit(user: user.username, action: "container.view", container: name, outcome: "ok", ip: context.clientIP)
         return encode(
             ContainerDetail(
@@ -623,8 +636,17 @@ struct PanelRoutes {
                 filesAvailable: await containers.fileService(containerName: name) != nil,
                 canManageSubusers: canManageSubUsers(user, serverName: name),
                 memoryLimitBytes: limit?.memoryBytes, cpuCores: limit?.cpuCores,
-                exit: exit
+                exit: exit, startupState: startupState
             ))
+    }
+
+    /// The egg's `config.startup.done` markers for a provisioned server, or nil
+    /// if the container isn't a provisioned server / its egg has none.
+    private func startupMarkers(forContainer name: String) throws -> [String]? {
+        guard let record = try store.serverRecord(name: name), let eggID = record.eggID,
+            let egg = try store.egg(id: eggID)
+        else { return nil }
+        return (try? egg.parsed().doneStrings)?.filter { !$0.isEmpty }
     }
 
     // MARK: Power

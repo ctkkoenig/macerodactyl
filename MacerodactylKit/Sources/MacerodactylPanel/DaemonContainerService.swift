@@ -104,6 +104,11 @@ public struct DaemonContainerService: ContainerService {
         return await cli.inspectState(containerID: container.id)
     }
 
+    public func startedAt(containerName: String) async -> Date? {
+        guard let container = await container(named: containerName) else { return nil }
+        return await cli.startedAt(containerID: container.id)
+    }
+
     public func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>? {
         guard let container = await container(named: containerName), container.isRunning else { return nil }
         return cli.statsStream(containerID: container.id)

@@ -48,7 +48,7 @@ const bytes = n => {
 
 let statSrc = null, logSrc = null, landingTimer = null, current = null, detail = null, tab = 'console';
 let me = { isAdmin: false };
-function closeStreams() { if (statSrc) { statSrc.close(); statSrc = null; } if (logSrc) { logSrc.close(); logSrc = null; } }
+function closeStreams() { if (statSrc) { statSrc.close(); statSrc = null; } if (logSrc) { logSrc.close(); logSrc = null; } stopStartupPoll(); }
 function stopLanding() { if (landingTimer) { clearInterval(landingTimer); landingTimer = null; } }
 async function jget(p) { const r = await fetch(p); if (!r.ok) throw r; return r.json(); }
 const enc = encodeURIComponent;
@@ -302,9 +302,36 @@ function crashBanner(x) {
 function wsHead() {
   return h('div', { class: 'wshead' },
     h('div', { class: 'h' },
-      h('h1', { text: current }),
+      h('div', { class: 'titlerow' }, h('h1', { text: current }), startPill()),
       h('div', { class: 'desc', text: detail.image + (detail.stack ? '  ·  ' + detail.stack : '') })),
     powerRow());
+}
+// A running egg-server reports whether it has finished booting: "Starting…"
+// until the egg's done marker appears, then "Online".
+function startPill() {
+  if (detail.startupState === 'starting') return h('span', { class: 'spill starting', text: 'Starting…' });
+  if (detail.startupState === 'online') return h('span', { class: 'spill online', text: 'Online' });
+  return null;
+}
+// While a server is "starting", re-poll its detail so the pill flips to "Online"
+// on its own once the egg's done marker appears. Stops as soon as it's online or
+// the user leaves the container.
+let startupTimer = null;
+function stopStartupPoll() { if (startupTimer) { clearTimeout(startupTimer); startupTimer = null; } }
+function scheduleStartupPoll() {
+  stopStartupPoll();
+  if (!current || !detail || detail.startupState !== 'starting') return;
+  startupTimer = setTimeout(async () => {
+    if (!current) return;
+    try {
+      const d = await jget('/api/containers/' + enc(current));
+      if (!current || !detail) return;
+      detail.startupState = d.startupState;
+      const tr = document.querySelector('.titlerow');
+      if (tr) { const old = tr.querySelector('.spill'); if (old) old.remove(); const np = startPill(); if (np) tr.append(np); }
+      scheduleStartupPoll();
+    } catch (_) {}
+  }, 5000);
 }
 function metaRows() {
   const d = detail, kv = (k, v) => h('div', { class: 'kv' }, h('span', { class: 'kk', text: k }), h('span', { class: 'vv', text: v }));
@@ -344,6 +371,7 @@ function render() {
   if (tab === 'users') loadSubusers();
   if (tab === 'network') loadAllocations();
   if (tab === 'activity') loadActivity();
+  scheduleStartupPoll();
 }
 
 // --- console + power + lifecycle -------------------------------------------

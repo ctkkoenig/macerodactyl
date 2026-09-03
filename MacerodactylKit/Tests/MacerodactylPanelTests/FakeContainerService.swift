@@ -37,8 +37,10 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
         }
     }
 
+    var cannedLogHistory: [String: String] = [:]
     func logHistory(containerName: String, tail: Int, since: String?) async -> String? {
         guard fixtures[containerName] != nil else { return nil }
+        if let canned = cannedLogHistory[containerName] { return canned }
         return [
             "2026-09-02T10:00:00Z starting up",
             "2026-09-02T10:00:01Z listening on 8080",
@@ -73,6 +75,8 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
     func limits() async -> [String: ContainerLimits] { cannedLimits }
     var cannedExitInfo: [String: ContainerExitInfo] = [:]
     func exitInfo(containerName: String) async -> ContainerExitInfo? { cannedExitInfo[containerName] }
+    var cannedStartedAt: [String: Date] = [:]
+    func startedAt(containerName: String) async -> Date? { cannedStartedAt[containerName] }
 
     func statsSnapshot() async -> [String: ContainerStats] {
         var out: [String: ContainerStats] = [:]

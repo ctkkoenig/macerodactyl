@@ -35,6 +35,9 @@ public protocol ContainerService: Sendable {
     /// restart count) — one `docker inspect`, so callers fetch it only for a
     /// container that isn't running. nil if it's gone or inspect fails.
     func exitInfo(containerName: String) async -> ContainerExitInfo?
+    /// When a container started (for a truthful uptime / startup-state probe),
+    /// or nil if unavailable.
+    func startedAt(containerName: String) async -> Date?
     /// Live stats stream for one container (for the focused view).
     func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>?
     /// The current schedule for a container, if any, plus its last run.
@@ -201,6 +204,13 @@ public struct LiveContainerService: ContainerService {
             let cli = await MainActor.run(body: { store.cli })
         else { return nil }
         return await cli.inspectState(containerID: container.id)
+    }
+
+    public func startedAt(containerName: String) async -> Date? {
+        guard let container = await container(named: containerName),
+            let cli = await MainActor.run(body: { store.cli })
+        else { return nil }
+        return await cli.startedAt(containerID: container.id)
     }
 
     public func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>? {
