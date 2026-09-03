@@ -150,10 +150,17 @@ public struct ServerProvisioner: Sendable {
             args.append(spec.install.container)
             args.append("/mnt/install/install.sh")
             for try await line in cli.streamLines(args, mergeStderr: true) { emit(line) }
+        }
 
-            // Match Wings: the install ran as root, so hand the data dir to the
-            // runtime user (uid 1000 in the pterodactyl yolks images). Best-effort
-            // — harmless where the platform already maps ownership (Docker Desktop).
+        // Apply the egg's config.files (e.g. set server-port to the allocation)
+        // after the install populated files and before ownership + boot — the
+        // step Wings does on every start.
+        applyConfigFiles(spec: spec, dataDir: dataDir, emit: emit)
+
+        // Match Wings: hand the data dir to the runtime user (uid 1000 in the
+        // yolks images) — covers install output and the config edits. Needs the
+        // install image to run chown in; best-effort.
+        if spec.install.isRunnable {
             emit("» Setting data ownership…")
             let chown = [
                 "run", "--rm", "--entrypoint", "chown",
@@ -181,6 +188,15 @@ public struct ServerProvisioner: Sendable {
 
         // Tidy the install artifacts.
         try? FileManager.default.removeItem(at: installDir)
+    }
+
+    private func applyConfigFiles(spec: ProvisionSpec, dataDir: URL, emit: @escaping (String) -> Void) {
+        guard !spec.configFiles.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        emit("» Applying config files…")
+        let subs = ConfigFileApplier.substitutions(environment: spec.environment)
+        let result = ConfigFileApplier.apply(configFilesJSON: spec.configFiles, into: dataDir, substitutions: subs)
+        for file in result.applied { emit("  set \(file)") }
+        for warning in result.warnings { emit("  \(warning)") }
     }
 
     /// Best-effort teardown of a partial or unwanted stack. `stackDir` is always

@@ -334,7 +334,7 @@ extension PanelRoutes {
         }
         let spec = ProvisionSpec(
             name: name, image: image, startup: resolved.startup.value, environment: resolved.environment,
-            install: egg.install, limits: limits, portMappings: mappings)
+            install: egg.install, limits: limits, portMappings: mappings, configFiles: egg.configFiles)
 
         // Persist the record BEFORE streaming so a crash mid-install is visible.
         try? store.createServerRecord(

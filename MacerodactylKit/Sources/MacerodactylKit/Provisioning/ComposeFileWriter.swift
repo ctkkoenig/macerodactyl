@@ -38,6 +38,11 @@ public struct ProvisionSpec: Sendable, Equatable {
     public var limits: ServerLimits
     public var portMappings: [PortMapping]
     public var extraMounts: [VolumeMount]
+    /// The egg's `config.files` (raw JSON) — applied to the data dir before boot.
+    public var configFiles: String
+    /// Graceful-stop mapping from the egg's `config.stop` (see ComposeFileWriter).
+    public var stopSignal: String?
+    public var stopGracePeriodSeconds: Int?
     public var dataDirName: String
     public var containerDataPath: String
     public var restartPolicy: String
@@ -52,6 +57,9 @@ public struct ProvisionSpec: Sendable, Equatable {
         limits: ServerLimits = .init(),
         portMappings: [PortMapping] = [],
         extraMounts: [VolumeMount] = [],
+        configFiles: String = "",
+        stopSignal: String? = nil,
+        stopGracePeriodSeconds: Int? = nil,
         dataDirName: String = "data",
         containerDataPath: String = "/home/container",
         restartPolicy: String = "unless-stopped"
@@ -65,6 +73,9 @@ public struct ProvisionSpec: Sendable, Equatable {
         self.limits = limits
         self.portMappings = portMappings
         self.extraMounts = extraMounts
+        self.configFiles = configFiles
+        self.stopSignal = stopSignal
+        self.stopGracePeriodSeconds = stopGracePeriodSeconds
         self.dataDirName = dataDirName
         self.containerDataPath = containerDataPath
         self.restartPolicy = restartPolicy

@@ -111,7 +111,8 @@ case "provision":
     let spec = ProvisionSpec(
         name: serverName, image: image, startup: resolved.startup.value, environment: resolved.environment,
         install: egg.install, limits: ServerLimits(memoryMiB: memoryMiB),
-        portMappings: [PortMapping(hostIP: "127.0.0.1", hostPort: port, containerPort: port)])
+        portMappings: [PortMapping(hostIP: "127.0.0.1", hostPort: port, containerPort: port)],
+        configFiles: egg.configFiles)
     try FileManager.default.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
     print("Provisioning \"\(serverName)\" from \(egg.name) [\(image)] into \(scratchRoot.path)")
     let service = DaemonContainerService(cli: DockerCLI(binary: dockerURL), stacksRoot: scratchRoot)
