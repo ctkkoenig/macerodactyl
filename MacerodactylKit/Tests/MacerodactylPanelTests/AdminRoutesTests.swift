@@ -187,6 +187,22 @@ import Testing
         }
     }
 
+    @Test func createServerRejectsInvalidRequiredVariable() async throws {
+        let h = try await makeHarness()
+        try await h.app.test(.router) { client in
+            let token = try await login(client, "admin", h.adminPassword)
+            let eggId = try await importEgg(client, token: token, nestName: "MC", json: sampleEgg)
+            try await generateAllocations(client, token: token, start: 25565, end: 25566)
+            // SERVER_JARFILE is required; an empty override must be rejected (400).
+            let body = ByteBuffer(
+                string: #"{"name":"badvar","eggId":\#(eggId),"memoryMiB":512,"values":{"SERVER_JARFILE":""}}"#)
+            try await client.execute(uri: "/api/admin/servers", method: .post, headers: authed(token), body: body) {
+                #expect($0.status == .badRequest)
+            }
+            #expect(h.service.provisionSpecs.isEmpty)  // never reached provisioning
+        }
+    }
+
     @Test func failedProvisionFreesAllocationsAndMarksFailed() async throws {
         let h = try await makeHarness()
         h.service.provisionShouldFail = true

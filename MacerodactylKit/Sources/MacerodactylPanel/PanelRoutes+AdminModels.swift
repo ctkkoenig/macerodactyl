@@ -305,6 +305,12 @@ extension PanelRoutes {
         let image = (body.image?.isEmpty == false ? body.image! : egg.defaultImage) ?? ""
         guard !image.isEmpty else { return json(["error": "no docker image for this egg"], status: .badRequest) }
 
+        // Enforce the egg's variable rules before doing anything expensive.
+        let violations = RuleValidator.validate(egg: egg, values: body.values ?? [:])
+        if let first = violations.first {
+            return json(["error": first.message, "variable": first.variable], status: .badRequest)
+        }
+
         // Reserve allocations, skipping ports currently published by live containers.
         let liveHostPorts = AllocationSelector.publishedHostPorts(from: await containers.allContainers().map(\.ports))
         let count = 1 + max(0, body.additionalAllocations ?? 0)
