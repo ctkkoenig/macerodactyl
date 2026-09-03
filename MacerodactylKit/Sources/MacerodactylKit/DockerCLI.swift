@@ -177,6 +177,63 @@ public struct DockerCLI: Sendable {
         }
     }
 
+    /// Attaches to a running container's process (`docker attach`), returning a
+    /// live session: an output line stream (stdout+stderr) plus a writable stdin
+    /// so a console can send commands to the server's own process. Requires the
+    /// container to have been started with stdin open (see ComposeFileWriter).
+    /// Teardown mirrors `streamLines`: cancelling the output stream, or calling
+    /// `close()`, terminates the docker process. `--sig-proxy=false` keeps host
+    /// signals from being forwarded to the container.
+    public func attach(containerID: String) -> AttachSession {
+        let process = Process()
+        process.executableURL = binary
+        process.arguments = ["attach", "--sig-proxy=false", containerID]
+        process.environment = processEnvironment
+        let inPipe = Pipe()
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardInput = inPipe
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+
+        let stream = AsyncThrowingStream<String, Error> { continuation in
+            let outBox = DataBox()
+            let errBox = DataBox()
+            outPipe.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                    if let last = outBox.drainRemainder() { continuation.yield(last) }
+                    return
+                }
+                for line in outBox.appendAndSplitLines(chunk) { continuation.yield(line) }
+            }
+            errPipe.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                    if let last = errBox.drainRemainder() { continuation.yield(last) }
+                    return
+                }
+                for line in errBox.appendAndSplitLines(chunk) { continuation.yield(line) }
+            }
+            process.terminationHandler = { _ in
+                outPipe.fileHandleForReading.readabilityHandler = nil
+                errPipe.fileHandleForReading.readabilityHandler = nil
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                if process.isRunning { process.terminate() }
+            }
+            do {
+                try process.run()
+            } catch {
+                continuation.finish(throwing: DockerError.launchFailed(String(describing: error)))
+            }
+        }
+        return AttachSession(process: process, stdin: inPipe.fileHandleForWriting, lines: stream)
+    }
+
     /// One-shot stats for all running containers in a single process
     /// (`docker stats --no-stream`). Cheaper than per-container polling; used
     /// for the landing cards on a slow cadence. Returns only real readings.
@@ -289,6 +346,47 @@ public struct DockerCLI: Sendable {
             group.cancelAll()
             return first
         }
+    }
+}
+
+/// A live `docker attach` session — the output line stream plus a writable
+/// stdin. Writing after the process ends (or after `close()`) is a safe no-op.
+public final class AttachSession: @unchecked Sendable {
+    public let lines: AsyncThrowingStream<String, Error>
+    private let process: Process
+    private let stdin: FileHandle
+    private let lock = NSLock()
+    private var closed = false
+
+    init(process: Process, stdin: FileHandle, lines: AsyncThrowingStream<String, Error>) {
+        self.process = process
+        self.stdin = stdin
+        self.lines = lines
+    }
+
+    /// Sends one line to the container's stdin (a newline is appended if absent).
+    public func write(_ text: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, process.isRunning else { return }
+        let line = text.hasSuffix("\n") ? text : text + "\n"
+        // A broken pipe (process gone) must not crash — swallow the write error.
+        try? stdin.write(contentsOf: Data(line.utf8))
+    }
+
+    public func close() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed else { return }
+        closed = true
+        try? stdin.close()
+        if process.isRunning { process.terminate() }
+    }
+
+    public var isRunning: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !closed && process.isRunning
     }
 }
 

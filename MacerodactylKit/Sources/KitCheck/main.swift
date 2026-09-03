@@ -108,6 +108,27 @@ case "exec":
     let entry = await ExecConsole(containerID: arguments[2], cli: cli).run(arguments[3])
     print("$ \(entry.command)\n\(entry.output)\(entry.isError ? "  [error]" : "")")
 
+case "attach":
+    // Live smoke for the interactive-console primitive: attach to a running
+    // container (started with stdin open), write a line, print what streams
+    // back for a couple seconds, then tear down.
+    guard arguments.count == 4 else {
+        print("usage: kitcheck attach CONTAINER_ID LINE")
+        exit(64)
+    }
+    let session = cli.attach(containerID: arguments[2])
+    let printer = Task {
+        do {
+            for try await line in session.lines { print("< \(line)") }
+        } catch { print("stream error: \(error)") }
+    }
+    try? await Task.sleep(for: .milliseconds(300))
+    print("> \(arguments[3])")
+    session.write(arguments[3])
+    try? await Task.sleep(for: .seconds(2))
+    session.close()
+    printer.cancel()
+
 case "rcon":
     guard arguments.count == 4 else {
         print("usage: kitcheck rcon NAME CMDLINE")
