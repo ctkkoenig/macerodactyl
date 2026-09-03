@@ -327,6 +327,38 @@ import Testing
         }
     }
 
+    @Test func generatesUDPAndBothProtocolAllocations() async throws {
+        let h = try await makeHarness()
+        try await h.app.test(.router) { client in
+            let token = try await login(client, "admin", h.adminPassword)
+            // UDP-only over one port.
+            try await client.execute(
+                uri: "/api/admin/allocations", method: .post, headers: authed(token),
+                body: ByteBuffer(string: #"{"portStart":7000,"portEnd":7000,"proto":"udp"}"#)
+            ) { #expect($0.status == .ok) }
+            // "both" over one port → a tcp AND a udp row.
+            try await client.execute(
+                uri: "/api/admin/allocations", method: .post, headers: authed(token),
+                body: ByteBuffer(string: #"{"portStart":7001,"portEnd":7001,"proto":"both"}"#)
+            ) { response in
+                #expect(response.status == .ok)
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                #expect(json["created"] as? Int == 2)
+            }
+            // An unknown protocol is rejected.
+            try await client.execute(
+                uri: "/api/admin/allocations", method: .post, headers: authed(token),
+                body: ByteBuffer(string: #"{"portStart":7002,"portEnd":7002,"proto":"sctp"}"#)
+            ) { #expect($0.status == .badRequest) }
+
+            let all = try h.store.listAllocations()
+            #expect(all.contains { $0.port == 7000 && $0.proto == "udp" })
+            #expect(all.contains { $0.port == 7001 && $0.proto == "tcp" })
+            #expect(all.contains { $0.port == 7001 && $0.proto == "udp" })
+            #expect(!all.contains { $0.port == 7002 })  // rejected, nothing created
+        }
+    }
+
     private func generateAllocations(
         _ client: some TestClientProtocol, token: String, start: Int, end: Int
     )

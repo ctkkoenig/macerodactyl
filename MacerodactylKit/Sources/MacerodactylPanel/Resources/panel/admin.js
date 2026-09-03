@@ -244,9 +244,10 @@ async function renderNode() {
     h('td', null, h('div', { class: 'rowact' }, !a.serverName && h('button', { class: 'btn ghost sm danger', onclick: async () => { try { await jsend('DELETE', '/api/admin/allocations/' + a.id); route(); } catch (e) { alert(e); } } }, 'Delete')))));
   const gnote = h('div');
   const gform = h('form', { class: 'form-row', onsubmit: async e => { e.preventDefault();
-    try { const r = await jsend('POST', '/api/admin/allocations', { portStart: num(gform, 'gs'), portEnd: num(gform, 'ge'), ip: val(gform, 'gip') }); gnote.replaceChildren(msg(r.created + ' allocation(s) added.', 'ok')); setTimeout(route, 500); }
+    try { const r = await jsend('POST', '/api/admin/allocations', { portStart: num(gform, 'gs'), portEnd: num(gform, 'ge'), ip: val(gform, 'gip'), proto: val(gform, 'gproto') }); gnote.replaceChildren(msg(r.created + ' allocation(s) added.', 'ok')); setTimeout(route, 500); }
     catch (err) { gnote.replaceChildren(msg(String(err), 'err')); } } },
     field('IP (blank = node IP)', input('gip')), field('From port', input('gs', { type: 'number', value: node.portRangeStart })), field('To port', input('ge', { type: 'number', value: node.portRangeEnd })),
+    field('Protocol', select('gproto', [{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }, { value: 'both', label: 'TCP + UDP' }], 'tcp')),
     h('div', { class: 'field', style: 'flex:0 0 auto;justify-content:flex-end' }, h('button', { class: 'btn', type: 'submit' }, 'Generate')));
   show(pageHeader('Node', 'This machine — the single node'), card('Node configuration', nnote, nform),
     card('Generate allocations', gnote, gform), tableCard('Allocations', ['Binding', 'Assignment', ''], arows));

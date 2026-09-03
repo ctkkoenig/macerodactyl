@@ -215,8 +215,18 @@ extension PanelRoutes {
             body.portStart <= body.portEnd, (body.portEnd - body.portStart) <= 5000
         else { return json(["error": "give a valid port range (max 5000 ports)"], status: .badRequest) }
         let ip = body.ip?.isEmpty == false ? body.ip! : (try store.nodeConfig().hostIP)
-        let created = try store.generateAllocations(
-            ip: ip, ports: AllocationSelector.expand(ranges: [body.portStart...body.portEnd]), proto: body.proto ?? "tcp")
+        // Protocol: tcp (default), udp, or both (a tcp AND a udp row per port, as
+        // many game servers need query/RCON on udp alongside tcp).
+        let requested = (body.proto ?? "tcp").lowercased()
+        guard ["tcp", "udp", "both"].contains(requested) else {
+            return json(["error": "protocol must be tcp, udp, or both"], status: .badRequest)
+        }
+        let protos = requested == "both" ? ["tcp", "udp"] : [requested]
+        let ports = AllocationSelector.expand(ranges: [body.portStart...body.portEnd])
+        var created = 0
+        for proto in protos {
+            created += try store.generateAllocations(ip: ip, ports: ports, proto: proto)
+        }
         audit(
             user: user.username, action: "admin.allocation.generate", outcome: "ok", ip: context.clientIP,
             detail: "\(created) added")
