@@ -156,7 +156,39 @@ import Testing
             ContainerStats(
                 name: "x", cpuPercent: 0, memUsedBytes: 0, memLimitBytes: 0, memPercent: 0,
                 netRxBytes: 0, netTxBytes: 0, pids: 0, measuredAt: Date()))
-        #expect(PanelSchema.currentVersion == 13)
+        #expect(PanelSchema.currentVersion == 14)
+    }
+
+    @Test func migratesToV14AddingScheduleTasks() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try PanelDataStore(databasePath: dir.appending(path: "v14.sqlite").path)
+        #expect(try store.scheduleTasks(containerName: "bot").isEmpty)
+        try store.setScheduleTasks(
+            containerName: "bot",
+            tasks: [
+                ScheduleTask(seq: 0, action: .command, payload: "say restarting", offsetSeconds: 0),
+                ScheduleTask(seq: 1, action: .backup, payload: "nightly", offsetSeconds: 60),
+                ScheduleTask(seq: 2, action: .power, payload: "restart", offsetSeconds: 5),
+            ])
+        let tasks = try store.scheduleTasks(containerName: "bot")
+        #expect(tasks.map(\.action) == [.command, .backup, .power])
+        #expect(tasks.map(\.seq) == [0, 1, 2])  // seq reassigned from order
+        #expect(tasks[1].offsetSeconds == 60)
+        // Deleting the schedule cascades to its tasks.
+        try store.upsertSchedule(containerName: "bot", hour: 4, minute: 0, weekdays: [])
+        try store.deleteSchedule(containerName: "bot")
+        #expect(try store.scheduleTasks(containerName: "bot").isEmpty)
+    }
+
+    @Test func scheduleTaskValidationRejectsBadInput() {
+        #expect(ScheduleTask(seq: 0, action: .power, payload: "explode").validated() == nil)
+        #expect(ScheduleTask(seq: 0, action: .command, payload: "   ").validated() == nil)
+        // Valid ones normalize: power lowercased, offset clamped.
+        let power = ScheduleTask(seq: 0, action: .power, payload: "ReStart", offsetSeconds: -5).validated()
+        #expect(power?.payload == "restart" && power?.offsetSeconds == 0)
+        let backup = ScheduleTask(seq: 0, action: .backup, payload: "", offsetSeconds: 999_999).validated()
+        #expect(backup?.offsetSeconds == ScheduleTask.maxOffsetSeconds)  // clamped
     }
 
     @Test func migratesToV12AddingPasswordResets() throws {

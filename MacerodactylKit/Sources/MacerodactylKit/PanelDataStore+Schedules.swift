@@ -80,6 +80,40 @@ extension PanelDataStore {
 
     public func deleteSchedule(containerName: String) throws {
         try db.run("DELETE FROM schedules WHERE container_name = ?", [.text(containerName)])
+        try db.run("DELETE FROM schedule_tasks WHERE container_name = ?", [.text(containerName)])
+    }
+
+    // MARK: Task chains
+
+    /// A schedule's ordered task chain (empty = legacy single-restart behavior).
+    public func scheduleTasks(containerName: String) throws -> [ScheduleTask] {
+        try db.query(
+            "SELECT * FROM schedule_tasks WHERE container_name = ? ORDER BY seq", [.text(containerName)]
+        ).map { row in
+            ScheduleTask(
+                id: row["id"]?.asInt ?? 0,
+                seq: Int(row["seq"]?.asInt ?? 0),
+                action: ScheduleTask.Action(rawValue: row["action"]?.asString ?? "") ?? .power,
+                payload: row["payload"]?.asString ?? "",
+                offsetSeconds: Int(row["offset_seconds"]?.asInt ?? 0))
+        }
+    }
+
+    /// Replaces a container's whole task chain. `seq` is reassigned from the
+    /// array order, so callers just pass the tasks in the order they should run.
+    public func setScheduleTasks(containerName: String, tasks: [ScheduleTask]) throws {
+        try db.run("DELETE FROM schedule_tasks WHERE container_name = ?", [.text(containerName)])
+        for (index, task) in tasks.enumerated() {
+            try db.run(
+                """
+                INSERT INTO schedule_tasks (container_name, seq, action, payload, offset_seconds)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    .text(containerName), .integer(Int64(index)), .text(task.action.rawValue),
+                    .text(task.payload), .integer(Int64(max(task.offsetSeconds, 0))),
+                ])
+        }
     }
 
     public func schedule(containerName: String) throws -> PersistedSchedule? {

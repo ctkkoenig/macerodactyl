@@ -205,7 +205,7 @@ public enum PanelBackup {
 /// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
 /// scoping, and audit never have to be retrofitted into the data model.
 public enum PanelSchema {
-    public static let currentVersion = 13
+    public static let currentVersion = 14
 
     public static func migrate(_ db: Database) throws {
         if db.userVersion < 1 {
@@ -515,6 +515,25 @@ public enum PanelSchema {
                 "UPDATE schedules SET created_at = ? WHERE created_at IS NULL",
                 [.text(PanelSchema.nowISO())])
             db.userVersion = 13
+        }
+        if db.userVersion < 14 {
+            // Schedule task chains: an ordered list of steps a schedule runs when
+            // it fires (power / console command / backup), replacing the implicit
+            // single restart. A schedule with no rows here keeps the legacy
+            // restart behavior.
+            try db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schedule_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    container_name TEXT NOT NULL,
+                    seq INTEGER NOT NULL,
+                    action TEXT NOT NULL,
+                    payload TEXT NOT NULL DEFAULT '',
+                    offset_seconds INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_schedule_tasks_container ON schedule_tasks(container_name, seq);
+                """)
+            db.userVersion = 14
         }
     }
 
