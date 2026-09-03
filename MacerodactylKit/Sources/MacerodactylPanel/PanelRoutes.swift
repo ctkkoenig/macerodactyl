@@ -45,6 +45,9 @@ struct PanelRoutes {
         // First-run web setup (only reachable while no account exists).
         router.get("setup", use: setupPage)
         router.post("setup", use: setupSubmit)
+        // Password reset via a one-time admin-issued token.
+        router.get("reset", use: resetPage)
+        router.post("reset", use: resetSubmit)
 
         // Static frontend assets (no secrets — this is the client code). Served
         // from a fixed allow-list, never a filename from the URL.
@@ -53,6 +56,7 @@ struct PanelRoutes {
         router.get("assets/login.css", use: { req, _ in Self.asset(.loginCSS, req) })
         router.get("assets/login.js", use: { req, _ in Self.asset(.loginJS, req) })
         router.get("assets/setup.js", use: { req, _ in Self.asset(.setupJS, req) })
+        router.get("assets/reset.js", use: { req, _ in Self.asset(.resetJS, req) })
         router.get("assets/admin.css", use: { req, _ in Self.asset(.adminCSS, req) })
         router.get("assets/admin.js", use: { req, _ in Self.asset(.adminJS, req) })
         // The admin SPA shell — a separate bundle from the phone panel. The HTML
@@ -194,6 +198,49 @@ struct PanelRoutes {
         var response = json(["ok": true])
         response.setCookie(sessionCookie(token: token))
         return response
+    }
+
+    // MARK: Password reset (one-time admin-issued token)
+
+    struct ResetBody: Decodable {
+        let token: String
+        let password: String
+    }
+
+    /// The reset page. Always served (the token is validated on submit), so a
+    /// bad or expired link shows the form and a clear error rather than leaking
+    /// whether a token exists via the page itself.
+    @Sendable func resetPage(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        html(PanelAssets.string(.resetHTML))
+    }
+
+    /// Consumes a reset token and sets the new password. The token must be
+    /// unused and unexpired; on success it is marked consumed (never replayable)
+    /// and every existing session for that user is dropped, so a password reset
+    /// also evicts any session an attacker may already hold.
+    @Sendable func resetSubmit(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        guard let body = try? await request.decode(as: ResetBody.self, context: context), !body.token.isEmpty else {
+            return json(["error": "Invalid request"], status: .badRequest)
+        }
+        guard body.password.count >= 8 else {
+            return json(["error": "Password must be at least 8 characters."], status: .badRequest)
+        }
+        let now = PanelSession.timestamp()
+        let tokenHash = PanelSession.hashToken(body.token)
+        guard let userID = try? store.validPasswordReset(tokenHash: tokenHash, nowISO: now),
+            let user = try? store.user(id: userID)
+        else {
+            return json(["error": "This reset link is invalid or has expired."], status: .badRequest)
+        }
+        do {
+            try await AccountManager(store: store).setPassword(userID: userID, password: body.password)
+        } catch {
+            return json(["error": "Could not update the password."], status: .internalServerError)
+        }
+        try? store.consumePasswordReset(tokenHash: tokenHash, atISO: now)
+        try? store.deleteAllSessions(userID: userID)  // force re-authentication everywhere
+        audit(user: user.username, action: "password.reset", outcome: "ok", ip: context.clientIP)
+        return json(["ok": true])
     }
 
     @Sendable func appPage(_ request: Request, context: PanelRequestContext) async throws -> Response {

@@ -19,6 +19,7 @@ extension PanelRoutes {
 
         admin.get("users", use: apiAdminUsersList)
         admin.post("users", use: apiAdminUserCreate)
+        admin.post("users/:id/reset", use: apiAdminUserResetPassword)
         admin.delete("users/:id", use: apiAdminUserDelete)
 
         admin.get("node", use: apiAdminNodeGet)
@@ -122,6 +123,31 @@ extension PanelRoutes {
         } catch {
             return json(["error": "could not create user (name may be taken)"], status: .conflict)
         }
+    }
+
+    struct ResetLinkDTO: Encodable {
+        let username: String
+        /// The reset path (with the one-time token). The admin hands this to the
+        /// user; the client prefixes the panel origin to make a full link.
+        let path: String
+        let expiresAt: String
+    }
+
+    /// Issues a single-use password-reset link for a user and returns it to the
+    /// admin to hand over out of band (there is no email delivery). The raw token
+    /// is shown exactly once here; only its hash is stored.
+    @Sendable func apiAdminUserResetPassword(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let admin = try context.requireIdentity()
+        let id = try requireInt(context, "id")
+        guard let target = try store.user(id: id) else { throw notFound() }
+        let token = PanelSession.newToken()
+        let expiresAt = PanelSession.timestamp(Date().addingTimeInterval(3600))  // 1 hour
+        try store.createPasswordReset(
+            userID: target.id, tokenHash: PanelSession.hashToken(token), expiresAtISO: expiresAt)
+        audit(
+            user: admin.username, action: "admin.user.reset_issue", outcome: "ok", ip: context.clientIP,
+            detail: target.username)
+        return encode(ResetLinkDTO(username: target.username, path: "/reset?token=\(token)", expiresAt: expiresAt))
     }
 
     @Sendable func apiAdminUserDelete(_ request: Request, context: PanelRequestContext) async throws -> Response {

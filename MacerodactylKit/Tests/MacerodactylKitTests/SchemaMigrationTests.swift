@@ -156,7 +156,25 @@ import Testing
             ContainerStats(
                 name: "x", cpuPercent: 0, memUsedBytes: 0, memLimitBytes: 0, memPercent: 0,
                 netRxBytes: 0, netTxBytes: 0, pids: 0, measuredAt: Date()))
-        #expect(PanelSchema.currentVersion == 11)
+        #expect(PanelSchema.currentVersion == 12)
+    }
+
+    @Test func migratesToV12AddingPasswordResets() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try PanelDataStore(databasePath: dir.appending(path: "v12.sqlite").path)
+        let user = try store.createUser(username: "a", passwordHash: "h", isAdmin: false)
+        let future = "2999-01-01T00:00:00.000Z"
+        try store.createPasswordReset(userID: user.id, tokenHash: "hash1", expiresAtISO: future)
+        #expect(try store.validPasswordReset(tokenHash: "hash1", nowISO: "2026-09-03T00:00:00.000Z") == user.id)
+        // Expired token (now past its expiry) is not valid.
+        #expect(try store.validPasswordReset(tokenHash: "hash1", nowISO: "3000-01-01T00:00:00.000Z") == nil)
+        // Issuing a new token supersedes the prior unused one.
+        try store.createPasswordReset(userID: user.id, tokenHash: "hash2", expiresAtISO: future)
+        #expect(try store.validPasswordReset(tokenHash: "hash1", nowISO: "2026-09-03T00:00:00.000Z") == nil)
+        // Consuming makes it single-use.
+        try store.consumePasswordReset(tokenHash: "hash2", atISO: "2026-09-03T00:00:00.000Z")
+        #expect(try store.validPasswordReset(tokenHash: "hash2", nowISO: "2026-09-03T00:00:00.000Z") == nil)
     }
 
     @Test func migratesToV11AddingSchedulesTable() throws {

@@ -17,6 +17,7 @@ enum PanelAssets {
         case loginHTML = "login.html"
         case adminHTML = "admin.html"
         case setupHTML = "setup.html"
+        case resetHTML = "reset.html"
         case panelCSS = "panel.css"
         case loginCSS = "login.css"
         case adminCSS = "admin.css"
@@ -24,12 +25,13 @@ enum PanelAssets {
         case loginJS = "login.js"
         case adminJS = "admin.js"
         case setupJS = "setup.js"
+        case resetJS = "reset.js"
 
         var contentType: String {
             switch self {
-            case .appHTML, .loginHTML, .adminHTML, .setupHTML: "text/html; charset=utf-8"
+            case .appHTML, .loginHTML, .adminHTML, .setupHTML, .resetHTML: "text/html; charset=utf-8"
             case .panelCSS, .loginCSS, .adminCSS: "text/css; charset=utf-8"
-            case .panelJS, .loginJS, .adminJS, .setupJS: "application/javascript; charset=utf-8"
+            case .panelJS, .loginJS, .adminJS, .setupJS, .resetJS: "application/javascript; charset=utf-8"
             }
         }
     }

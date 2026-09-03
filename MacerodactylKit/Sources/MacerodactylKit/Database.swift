@@ -205,7 +205,7 @@ public enum PanelBackup {
 /// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
 /// scoping, and audit never have to be retrofitted into the data model.
 public enum PanelSchema {
-    public static let currentVersion = 11
+    public static let currentVersion = 12
 
     public static func migrate(_ db: Database) throws {
         if db.userVersion < 1 {
@@ -485,6 +485,25 @@ public enum PanelSchema {
                 );
                 """)
             db.userVersion = 11
+        }
+        if db.userVersion < 12 {
+            // Single-use, time-limited password-reset tokens. Only the token's
+            // SHA-256 hash is stored (like sessions), so a leaked database can't
+            // reset an account. Admin-issued; the link is handed to the user
+            // out of band (there is no email delivery).
+            try db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS password_resets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    token_hash TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    expires_at TEXT NOT NULL,
+                    used_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id);
+                """)
+            db.userVersion = 12
         }
     }
 }

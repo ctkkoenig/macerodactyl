@@ -195,10 +195,14 @@ async function renderSettings() {
 // Users
 async function renderUsers() {
   const users = await jget('/api/admin/users');
+  const note = h('div');
   const rows = users.map(u => h('tr', null,
     h('td', { text: u.username }), h('td', null, u.isAdmin ? badge('admin', 'good') : badge('user', 'muted')),
-    h('td', null, h('div', { class: 'rowact' }, h('button', { class: 'btn ghost sm danger', onclick: async () => { if (!confirm('Delete ' + u.username + '?')) return; try { await jsend('DELETE', '/api/admin/users/' + u.id); route(); } catch (e) { alert(e); } } }, 'Delete')))));
-  const note = h('div');
+    h('td', null, h('div', { class: 'rowact' },
+      h('button', { class: 'btn ghost sm', onclick: async () => {
+        try { const r = await jsend('POST', '/api/admin/users/' + u.id + '/reset'); showResetLink(note, r); }
+        catch (e) { note.replaceChildren(msg(String(e), 'err')); } } }, 'Reset password'),
+      h('button', { class: 'btn ghost sm danger', onclick: async () => { if (!confirm('Delete ' + u.username + '?')) return; try { await jsend('DELETE', '/api/admin/users/' + u.id); route(); } catch (e) { alert(e); } } }, 'Delete')))));
   const form = h('form', { class: 'form-row', onsubmit: async e => { e.preventDefault();
     try { await jsend('POST', '/api/admin/users', { username: val(form, 'username'), password: val(form, 'password'), isAdmin: chk(form, 'isAdmin') }); route(); }
     catch (err) { note.replaceChildren(msg(String(err), 'err')); } } },
@@ -206,6 +210,22 @@ async function renderUsers() {
     h('div', { class: 'field' }, h('label', { text: 'Role' }), h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'isAdmin' }), 'Administrator')),
     h('div', { class: 'field', style: 'flex:0 0 auto;justify-content:flex-end' }, h('button', { class: 'btn', type: 'submit' }, 'Create user')));
   show(pageHeader('Users', 'Accounts that can sign in to the panel'), tableCard('User list', ['Username', 'Role', ''], rows), card('Create user', note, form));
+}
+// Renders a freshly issued one-time reset link with a copy button. The link is
+// shown once here; the server only stored its hash. Handing it to the user is
+// out-of-band (there is no email delivery).
+function showResetLink(note, r) {
+  const url = location.origin + r.path;
+  const box = h('input', { class: 'input mono', value: url, readonly: true, onclick: e => e.target.select() });
+  box.style.width = '100%';
+  note.replaceChildren(h('div', { class: 'card', style: 'margin-top:10px' },
+    h('div', { class: 'muted', text: 'One-time reset link for ' + r.username + ' — copy it and send it to them. It expires in about an hour and works only once.' }),
+    h('div', { class: 'form-row', style: 'margin-top:8px' }, box,
+      h('button', { class: 'btn sm', style: 'flex:0 0 auto', onclick: () => {
+        box.select();
+        if (navigator.clipboard) navigator.clipboard.writeText(url).catch(() => {});
+        else { try { document.execCommand('copy'); } catch (e) {} }
+      } }, 'Copy'))));
 }
 
 // Node + allocations
