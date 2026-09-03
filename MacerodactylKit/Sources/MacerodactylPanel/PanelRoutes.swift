@@ -81,6 +81,7 @@ struct PanelRoutes {
         scoped.get(":name/stats", use: apiStatsStream)
         scoped.get(":name/metrics", use: apiMetrics)
         scoped.post(":name/console", use: apiConsole)
+        scoped.post(":name/console/input", use: apiConsoleInput)
         scoped.get(":name/files", use: apiFilesList)
         scoped.get(":name/files/content", use: apiFileRead)
         scoped.put(":name/files/content", use: apiFileWrite)
@@ -874,6 +875,26 @@ struct PanelRoutes {
     struct ConsoleResult: Encodable {
         let command, output: String
         let isError: Bool
+    }
+
+    struct ConsoleInputBody: Decodable { let line: String }
+
+    /// Sends one line to a running server's stdin (the interactive console). The
+    /// output appears in the live log stream, so this only acknowledges delivery.
+    @Sendable func apiConsoleInput(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let body = try? await request.decode(as: ConsoleInputBody.self, context: context) else {
+            return json(["error": "line required"], status: .badRequest)
+        }
+        let ok = await containers.consoleSend(containerName: name, line: body.line)
+        audit(
+            user: user.username, action: "container.console", container: name,
+            outcome: ok ? "ok" : "error", ip: context.clientIP, detail: body.line)
+        guard ok else {
+            return json(["error": "The server isn't running, so the console can't accept input."], status: .conflict)
+        }
+        return json(["ok": true])
     }
 
     // MARK: Files

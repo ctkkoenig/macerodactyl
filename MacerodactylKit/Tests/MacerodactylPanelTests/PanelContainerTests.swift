@@ -76,6 +76,28 @@ import Testing
         }
     }
 
+    @Test func consoleInputRequiresConsolePermissionAndSendsLine() async throws {
+        // Without console → 403.
+        let noConsole = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        try await noConsole.app.test(.router) { client in
+            let token = try await loginToken(client, noConsole)
+            try await client.execute(
+                uri: "/api/containers/bot/console/input", method: .post,
+                headers: headers(token, csrf: true, json: true), body: ByteBuffer(string: #"{"line":"stop"}"#)
+            ) { #expect($0.status == .forbidden) }
+        }
+        // With console → the line reaches the service's stdin channel.
+        let granted = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, console: true))
+        try await granted.app.test(.router) { client in
+            let token = try await loginToken(client, granted)
+            try await client.execute(
+                uri: "/api/containers/bot/console/input", method: .post,
+                headers: headers(token, csrf: true, json: true), body: ByteBuffer(string: #"{"line":"say hi"}"#)
+            ) { #expect($0.status == .ok) }
+            #expect(granted.service.consoleInput.contains { $0.name == "bot" && $0.line == "say hi" })
+        }
+    }
+
     @Test func schedulesRequireSchedulesPermission() async throws {
         // view but NOT schedules → 403 on both read and write.
         let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))

@@ -52,6 +52,13 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
         return ConsoleEntry(command: command, output: "ran: \(command)")
     }
 
+    private(set) var consoleInput: [(name: String, line: String)] = []
+    func consoleSend(containerName: String, line: String) async -> Bool {
+        guard let fixture = fixtures[containerName], fixture.container.isRunning else { return false }
+        lock.withLock { consoleInput.append((containerName, line)) }
+        return true
+    }
+
     func fileService(containerName: String) async -> FileService? {
         guard let fixture = fixtures[containerName], let root = fixture.stackRoot else { return nil }
         return FileService(container: fixture.container, stacksRoot: root.deletingLastPathComponent())

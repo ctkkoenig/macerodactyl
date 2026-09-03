@@ -9,6 +9,8 @@ import MacerodactylKit
 public struct DaemonContainerService: ContainerService {
     let cli: DockerCLI
     let stacksRoot: URL
+    /// Shared across requests so one attach session per container is reused.
+    let consoleHub = ConsoleHub()
 
     public init(cli: DockerCLI, stacksRoot: URL) {
         self.cli = cli
@@ -72,6 +74,11 @@ public struct DaemonContainerService: ContainerService {
         case .notMinecraft:
             return await ExecConsole(containerID: container.id, cli: cli).run(command)
         }
+    }
+
+    public func consoleSend(containerName: String, line: String) async -> Bool {
+        guard let container = await container(named: containerName), container.isRunning else { return false }
+        return await consoleHub.send(cli: cli, containerID: container.id, line: line)
     }
 
     public func fileService(containerName: String) async -> FileService? {

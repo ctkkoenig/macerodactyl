@@ -21,6 +21,9 @@ public protocol ContainerService: Sendable {
     func logHistory(containerName: String, tail: Int, since: String?) async -> String?
     /// Run one console command (exec, or RCON for Minecraft).
     func runConsole(containerName: String, command: String) async -> ConsoleEntry?
+    /// Send one line to a running server's stdin (the interactive console). Output
+    /// appears in the live log stream. Returns false if the server isn't running.
+    func consoleSend(containerName: String, line: String) async -> Bool
     /// File service for a container, or nil if it has no stack folder.
     func fileService(containerName: String) async -> FileService?
     /// Live stats snapshot for all containers (for the landing).
@@ -85,6 +88,8 @@ func provisionErrorStream(_ message: String) -> AsyncThrowingStream<String, Erro
 public struct LiveContainerService: ContainerService {
     let store: ContainerStore
     let stacksRoot: @Sendable () -> URL
+    /// Shared across requests so one attach session per container is reused.
+    let consoleHub = ConsoleHub()
 
     public init(store: ContainerStore, stacksRoot: @escaping @Sendable () -> URL = { AppSettings.stacksRoot }) {
         self.store = store
@@ -146,6 +151,13 @@ public struct LiveContainerService: ContainerService {
         case .notMinecraft:
             return await ExecConsole(containerID: container.id, cli: cli).run(command)
         }
+    }
+
+    public func consoleSend(containerName: String, line: String) async -> Bool {
+        guard let container = await container(named: containerName), container.isRunning,
+            let cli = await MainActor.run(body: { store.cli })
+        else { return false }
+        return await consoleHub.send(cli: cli, containerID: container.id, line: line)
     }
 
     public func fileService(containerName: String) async -> FileService? {
