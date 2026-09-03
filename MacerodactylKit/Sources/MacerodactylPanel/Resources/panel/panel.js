@@ -551,6 +551,8 @@ function fileRow(en, path) {
       onclick: () => en.isDirectory ? cd(en.path) : openFile(en.path) }),
     en.isDirectory ? null : h('span', { class: 'use', text: bytes(en.size) }));
   if (!en.isDirectory) row.append(h('button', { class: 'act', title: 'Download', onclick: () => window.open(api('/files/download') + '?path=' + enc(en.path), '_blank'), text: '⤓' }));
+  if (en.isDirectory) row.append(h('button', { class: 'act', title: 'Compress', onclick: () => compressEntry(en, path), text: '🗜' }));
+  else if (/\.(zip|tar\.gz|tgz|tar)$/i.test(en.name)) row.append(h('button', { class: 'act', title: 'Extract', onclick: () => extractEntry(en, path), text: '📦' }));
   row.append(
     h('button', { class: 'act', title: 'Rename', onclick: () => renameEntry(en, path), text: '✎' }),
     h('button', { class: 'act del', title: 'Delete', onclick: () => deleteEntry(en), text: '🗑' }));
@@ -569,6 +571,21 @@ function uploadButton(path) {
   };
   const btn = h('button', { text: '⤒ Upload', onclick: () => input.click() });
   return h('span', {}, btn, input);
+}
+async function compressEntry(en, path) {
+  const archive = (path ? path + '/' : '') + en.name + '.tar.gz';
+  try {
+    const r = await fetch(api('/files/compress'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ paths: [en.path], archive }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || 'Compress failed.'); }
+  } catch (e) { alert('Compress failed.'); }
+  listDir(path);
+}
+async function extractEntry(en, path) {
+  try {
+    const r = await fetch(api('/files/decompress'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ archive: en.path, into: path || '' }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || 'Extract failed.'); }
+  } catch (e) { alert('Extract failed.'); }
+  listDir(path);
 }
 async function pullUrl(path) {
   const url = prompt('Download a file from URL (http/https):'); if (!url) return;

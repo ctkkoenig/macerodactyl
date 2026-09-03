@@ -89,6 +89,8 @@ struct PanelRoutes {
         scoped.post(":name/files/upload", use: apiFileUpload)
         scoped.post(":name/files/dir", use: apiFileMkdir)
         scoped.post(":name/files/pull", use: apiFilePull)
+        scoped.post(":name/files/compress", use: apiFileCompress)
+        scoped.post(":name/files/decompress", use: apiFileDecompress)
         scoped.post(":name/files/move", use: apiFileMove)
         scoped.delete(":name/files/entry", use: apiFileDelete)
         scoped.get(":name/schedule", use: apiScheduleGet)
@@ -1067,6 +1069,50 @@ struct PanelRoutes {
     struct FilePullBody: Decodable {
         let url: String
         let path: String
+    }
+
+    struct CompressBody: Decodable {
+        let paths: [String]
+        let archive: String
+    }
+    struct DecompressBody: Decodable {
+        let archive: String
+        let into: String
+    }
+
+    @Sendable func apiFileCompress(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let (name, service) = try await fileService(context)
+        guard let body = try? await request.decode(as: CompressBody.self, context: context),
+            !body.paths.isEmpty, !body.archive.isEmpty
+        else { return json(["error": "paths and archive required"], status: .badRequest) }
+        do {
+            try await service.compress(body.paths, to: body.archive)
+            audit(
+                user: try context.requireIdentity().username, action: "container.files", container: name,
+                outcome: "ok", ip: context.clientIP, detail: "compress \(body.archive)")
+            return json(["ok": true])
+        } catch {
+            return fileError(
+                error, user: try context.requireIdentity().username, container: name, ip: context.clientIP,
+                detail: "compress")
+        }
+    }
+
+    @Sendable func apiFileDecompress(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let (name, service) = try await fileService(context)
+        guard let body = try? await request.decode(as: DecompressBody.self, context: context), !body.archive.isEmpty
+        else { return json(["error": "archive required"], status: .badRequest) }
+        do {
+            try await service.decompress(body.archive, into: body.into)
+            audit(
+                user: try context.requireIdentity().username, action: "container.files", container: name,
+                outcome: "ok", ip: context.clientIP, detail: "decompress \(body.archive)")
+            return json(["ok": true])
+        } catch {
+            return fileError(
+                error, user: try context.requireIdentity().username, container: name, ip: context.clientIP,
+                detail: "decompress")
+        }
     }
 
     @Sendable func apiFilePull(_ request: Request, context: PanelRequestContext) async throws -> Response {
