@@ -574,7 +574,17 @@ struct PanelRoutes {
         let canManageSubusers: Bool
         let memoryLimitBytes: Int64?
         let cpuCores: Double?
+        /// Why a stopped container isn't running (crash / OOM). nil while running.
+        let exit: ExitInfo?
         struct Permissions: Encodable { let view, power, files, console, schedules, lifecycle, backups: Bool }
+        struct ExitInfo: Encodable {
+            let crashed: Bool
+            let reason: String?
+            let exitCode: Int
+            let oomKilled: Bool
+            let restartCount: Int
+            let finishedAt: String?
+        }
     }
 
     @Sendable func apiContainerDetail(_ request: Request, context: PanelRequestContext) async throws -> Response {
@@ -584,6 +594,13 @@ struct PanelRoutes {
         guard let container = await containers.container(named: name) else { throw notFound() }
         let engine = try store.authorizationEngine(for: user)
         let limit = await containers.limits()[name]
+        // Only a non-running container gets the extra inspect for exit detail.
+        var exit: ContainerDetail.ExitInfo?
+        if !container.isRunning, let info = await containers.exitInfo(containerName: name) {
+            exit = .init(
+                crashed: info.crashed, reason: info.reason, exitCode: info.exitCode,
+                oomKilled: info.oomKilled, restartCount: info.restartCount, finishedAt: info.finishedAt)
+        }
         audit(user: user.username, action: "container.view", container: name, outcome: "ok", ip: context.clientIP)
         return encode(
             ContainerDetail(
@@ -598,7 +615,8 @@ struct PanelRoutes {
                 ),
                 filesAvailable: await containers.fileService(containerName: name) != nil,
                 canManageSubusers: canManageSubUsers(user, serverName: name),
-                memoryLimitBytes: limit?.memoryBytes, cpuCores: limit?.cpuCores
+                memoryLimitBytes: limit?.memoryBytes, cpuCores: limit?.cpuCores,
+                exit: exit
             ))
     }
 

@@ -31,6 +31,10 @@ public protocol ContainerService: Sendable {
     /// Configured resource limits per container (from `docker inspect`; static-
     /// ish, so callers fetch on load rather than every poll). Keyed by name.
     func limits() async -> [String: ContainerLimits]
+    /// Last-exit detail for a stopped container (exit code, OOM kill, error,
+    /// restart count) — one `docker inspect`, so callers fetch it only for a
+    /// container that isn't running. nil if it's gone or inspect fails.
+    func exitInfo(containerName: String) async -> ContainerExitInfo?
     /// Live stats stream for one container (for the focused view).
     func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>?
     /// The current schedule for a container, if any, plus its last run.
@@ -190,6 +194,13 @@ public struct LiveContainerService: ContainerService {
         guard let cli = await MainActor.run(body: { store.cli }) else { return [:] }
         let ids = await allContainers().map(\.id)
         return await cli.containerLimits(ids: ids)
+    }
+
+    public func exitInfo(containerName: String) async -> ContainerExitInfo? {
+        guard let container = await container(named: containerName),
+            let cli = await MainActor.run(body: { store.cli })
+        else { return nil }
+        return await cli.inspectState(containerID: container.id)
     }
 
     public func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>? {

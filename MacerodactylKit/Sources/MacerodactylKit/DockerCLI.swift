@@ -284,6 +284,19 @@ public struct DockerCLI: Sendable {
         return formatter.date(from: trimmed) ?? ISO8601DateFormatter().date(from: trimmed)
     }
 
+    /// The last-exit detail for a container (exit code, OOM kill, engine error,
+    /// restart count, finish time) — the inspect-only fields the `ps` status
+    /// string can't express. nil if the container is gone or inspect fails.
+    public func inspectState(containerID: String) async -> ContainerExitInfo? {
+        // RestartCount is a sibling of .State; emit it, a tab, then .State JSON.
+        guard
+            let output = try? await run(
+                ["inspect", "--format", #"{{.RestartCount}}{{"\t"}}{{json .State}}"#, containerID],
+                timeout: .seconds(10))
+        else { return nil }
+        return ContainerExitInfo.parse(inspectOutput: output)
+    }
+
     /// True if `docker compose version` succeeds (the plugin is installed).
     public func composePluginWorks() async -> Bool {
         guard let result = try? await execute(["compose", "version"], timeout: .seconds(10)) else {

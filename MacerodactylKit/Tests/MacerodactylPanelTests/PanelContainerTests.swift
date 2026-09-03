@@ -27,6 +27,44 @@ import Testing
         return h
     }
 
+    // MARK: Crash / OOM surfacing (T8.1)
+
+    @Test func stoppedContainerDetailSurfacesOOMKill() async throws {
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        // Make "bot" a stopped container that was OOM-killed.
+        harness.service.fixtures["bot"] = .init(
+            container: .fixture(name: "bot", workingDir: harness.botStackRoot.path, running: false),
+            stackRoot: harness.botStackRoot)
+        harness.service.cannedExitInfo["bot"] = ContainerExitInfo(
+            exitCode: 137, oomKilled: true, error: "", restartCount: 2, finishedAt: "2026-09-03T04:00:00Z")
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            try await client.execute(uri: "/api/containers/bot", method: .get, headers: headers(token)) { response in
+                #expect(response.status == .ok)
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                let exit = json["exit"] as! [String: Any]
+                #expect(exit["crashed"] as? Bool == true)
+                #expect(exit["oomKilled"] as? Bool == true)
+                #expect(exit["reason"] as? String == "Out of memory (OOM-killed)")
+                #expect(exit["restartCount"] as? Int == 2)
+            }
+        }
+    }
+
+    @Test func runningContainerHasNoExitInfo() async throws {
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        // "bot" is running by default; even if exit info is set, it isn't inspected.
+        harness.service.cannedExitInfo["bot"] = ContainerExitInfo(
+            exitCode: 1, oomKilled: false, error: "", restartCount: 0, finishedAt: nil)
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            try await client.execute(uri: "/api/containers/bot", method: .get, headers: headers(token)) { response in
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                #expect(json["exit"] == nil || json["exit"] is NSNull)
+            }
+        }
+    }
+
     // MARK: Per-permission gating
 
     @Test func powerRequiresPowerPermission() async throws {

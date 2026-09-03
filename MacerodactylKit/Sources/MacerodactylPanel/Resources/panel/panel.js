@@ -286,6 +286,18 @@ function statCards() {
     card('pids', '◈', 'Processes', s ? String(s.pids) : null, null));
 }
 
+// A banner shown when a stopped container did not exit cleanly (crash or OOM).
+function crashBanner(x) {
+  const bits = [];
+  if (x.restartCount) bits.push(x.restartCount + (x.restartCount === 1 ? ' restart' : ' restarts'));
+  if (x.finishedAt) bits.push('stopped ' + x.finishedAt.replace('T', ' ').replace(/\..*/, ''));
+  return h('div', { class: 'crashbar' + (x.oomKilled ? ' oom' : '') },
+    h('span', { class: 'ci', text: x.oomKilled ? '⚠' : '✕' }),
+    h('div', { class: 'cb' },
+      h('div', { class: 'ct', text: x.reason || 'Stopped unexpectedly' }),
+      bits.length ? h('div', { class: 'cs', text: bits.join('  ·  ') }) : null));
+}
+
 function wsHead() {
   return h('div', { class: 'wshead' },
     h('div', { class: 'h' },
@@ -305,6 +317,7 @@ window.setTab = function (t) { if (logSrc) { logSrc.close(); logSrc = null; } ta
 function render() {
   tabbar.querySelectorAll('.navitem').forEach(b => b.classList.toggle('sel', b.getAttribute('data-t') === tab));
   const parts = [wsHead()];
+  if (detail.exit && detail.exit.crashed) parts.push(crashBanner(detail.exit));
   if (tab === 'console') {
     const main = h('div', {}, lifecycleRow(), h('div', { class: 'term', id: 'cterm' }), quickRow(), inputBar());
     parts.push(h('div', { class: 'consolelayout' }, main, statCards()));

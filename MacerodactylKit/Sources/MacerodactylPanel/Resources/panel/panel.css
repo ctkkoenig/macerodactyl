@@ -142,6 +142,14 @@ h2.section { font-size:12px; letter-spacing:.6px; text-transform:uppercase; colo
 .arow .aic.bad { background:color-mix(in srgb, var(--red) 18%, transparent); color:var(--red); }
 .arow .abody { min-width:0; }
 .arow .abody > div:first-child { font-size:14px; word-break:break-word; }
+.crashbar { display:flex; gap:12px; align-items:center; margin:12px 0; padding:12px 14px; border-radius:12px;
+  background:color-mix(in srgb, var(--red) 12%, transparent); border:1px solid color-mix(in srgb, var(--red) 45%, transparent); }
+.crashbar.oom { background:color-mix(in srgb, var(--amber) 14%, transparent); border-color:color-mix(in srgb, var(--amber) 50%, transparent); }
+.crashbar .ci { flex:0 0 auto; width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+  font-size:15px; background:var(--red); color:#fff; }
+.crashbar.oom .ci { background:var(--amber); }
+.crashbar .ct { font-size:14px; font-weight:600; }
+.crashbar .cs { font-size:12px; color:var(--muted); margin-top:2px; }
 .fail { color:var(--red); } .okrun { color:var(--muted); } .timeout { color:var(--amber); }
 h2 { font-size:15px; color:var(--fg2); font-weight:600; margin:18px 2px 8px; }
 

@@ -99,6 +99,11 @@ public struct DaemonContainerService: ContainerService {
         await cli.containerLimits(ids: await fetchAll().map(\.id))
     }
 
+    public func exitInfo(containerName: String) async -> ContainerExitInfo? {
+        guard let container = await container(named: containerName) else { return nil }
+        return await cli.inspectState(containerID: container.id)
+    }
+
     public func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>? {
         guard let container = await container(named: containerName), container.isRunning else { return nil }
         return cli.statsStream(containerID: container.id)

@@ -71,6 +71,8 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
         "bot": ContainerLimits(memoryBytes: 512 * 1024 * 1024, cpuCores: 2)  // "secret" left unlimited
     ]
     func limits() async -> [String: ContainerLimits] { cannedLimits }
+    var cannedExitInfo: [String: ContainerExitInfo] = [:]
+    func exitInfo(containerName: String) async -> ContainerExitInfo? { cannedExitInfo[containerName] }
 
     func statsSnapshot() async -> [String: ContainerStats] {
         var out: [String: ContainerStats] = [:]
