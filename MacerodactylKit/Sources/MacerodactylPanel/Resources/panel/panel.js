@@ -539,7 +539,8 @@ async function listDir(path) {
   parts.forEach((seg, i) => { const acc = parts.slice(0, i + 1).join('/'); crumb.append(h('span', { text: '/' }), h('button', { onclick: () => cd(acc), text: seg })); });
   const bar = h('div', { class: 'filebar' },
     h('button', { text: '＋ New folder', onclick: () => mkdir(path) }),
-    uploadButton(path));
+    uploadButton(path),
+    h('button', { text: '↧ From URL', onclick: () => pullUrl(path) }));
   const listEl = h('div', { class: 'clist' }, entries.map(en => fileRow(en, path)));
   host.replaceChildren(crumb, bar, listEl);
 }
@@ -568,6 +569,17 @@ function uploadButton(path) {
   };
   const btn = h('button', { text: '⤒ Upload', onclick: () => input.click() });
   return h('span', {}, btn, input);
+}
+async function pullUrl(path) {
+  const url = prompt('Download a file from URL (http/https):'); if (!url) return;
+  let name = url.split('?')[0].split('/').pop() || 'download';
+  name = prompt('Save as:', name); if (!name) return;
+  const target = (path ? path + '/' : '') + name;
+  try {
+    const r = await fetch(api('/files/pull'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ url, path: target }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || 'Download failed.'); }
+  } catch (e) { alert('Download failed.'); }
+  listDir(path);
 }
 async function mkdir(path) {
   const name = prompt('New folder name'); if (!name) return;

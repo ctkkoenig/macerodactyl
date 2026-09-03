@@ -42,6 +42,19 @@ import Testing
 
     // MARK: Availability gate
 
+    @Test func pullRejectsNonHTTPAndTraversalBeforeAnyDownload() async throws {
+        let fx = try makeFixture()
+        defer { fx.cleanup() }
+        // Non-http scheme is refused (never touches the network).
+        await #expect(throws: FileServiceError.invalidPath) {
+            try await fx.service.pull(from: "file:///etc/passwd", to: "grabbed.txt")
+        }
+        // A traversal destination is refused by confinement.
+        await #expect(throws: (any Error).self) {
+            try await fx.service.pull(from: "https://example.com/x", to: "../escape.txt")
+        }
+    }
+
     @Test func unmanagedContainerGetsNoService() {
         let bare = DockerContainer(
             id: "b", name: "fixture-bare", image: "alpine", state: .running, status: "Up",

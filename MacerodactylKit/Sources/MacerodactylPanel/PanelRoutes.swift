@@ -88,6 +88,7 @@ struct PanelRoutes {
         scoped.get(":name/files/download", use: apiFileDownload)
         scoped.post(":name/files/upload", use: apiFileUpload)
         scoped.post(":name/files/dir", use: apiFileMkdir)
+        scoped.post(":name/files/pull", use: apiFilePull)
         scoped.post(":name/files/move", use: apiFileMove)
         scoped.delete(":name/files/entry", use: apiFileDelete)
         scoped.get(":name/schedule", use: apiScheduleGet)
@@ -1063,6 +1064,28 @@ struct PanelRoutes {
     }
 
     struct MkdirBody: Decodable { let path: String }
+    struct FilePullBody: Decodable {
+        let url: String
+        let path: String
+    }
+
+    @Sendable func apiFilePull(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let (name, service) = try await fileService(context)
+        guard let body = try? await request.decode(as: FilePullBody.self, context: context),
+            !body.url.isEmpty, !body.path.isEmpty
+        else { return json(["error": "url and path required"], status: .badRequest) }
+        do {
+            try await service.pull(from: body.url, to: body.path)
+            audit(
+                user: try context.requireIdentity().username, action: "container.files", container: name,
+                outcome: "ok", ip: context.clientIP, detail: "pull \(body.path)")
+            return json(["ok": true])
+        } catch {
+            return fileError(
+                error, user: try context.requireIdentity().username, container: name, ip: context.clientIP,
+                detail: "pull \(body.path)")
+        }
+    }
 
     @Sendable func apiFileMkdir(_ request: Request, context: PanelRequestContext) async throws -> Response {
         let (name, service) = try await fileService(context)

@@ -194,6 +194,38 @@ public struct FileService: Sendable {
         try atomicWrite(data, to: url)
     }
 
+    /// Downloads a remote file directly into the tree — how you install a jar or
+    /// modpack without uploading gigabytes from your laptop. http(s) only,
+    /// streamed to a temp file (never all into memory), size-capped, and the
+    /// destination is confined like every other write.
+    public func pull(from urlString: String, to relativePath: String, maxBytes: Int = maxUploadBytes) async throws {
+        guard let url = URL(string: urlString), let scheme = url.scheme?.lowercased(),
+            scheme == "http" || scheme == "https"
+        else { throw FileServiceError.invalidPath }
+        let dest = try resolve(relativePath)
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: dest.path, isDirectory: &isDir), isDir.boolValue {
+            throw FileServiceError.isDirectory
+        }
+        let (tempURL, response) = try await URLSession.shared.download(from: url)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw FileServiceError.io("download failed (HTTP \(http.statusCode))")
+        }
+        let size = ((try? FileManager.default.attributesOfItem(atPath: tempURL.path))?[.size] as? NSNumber)?.intValue ?? 0
+        guard size <= maxBytes else { throw FileServiceError.tooLarge(actualBytes: size, limitBytes: maxBytes) }
+        let parent = dest.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: parent.path) {
+            try? FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        }
+        try? FileManager.default.removeItem(at: dest)
+        do {
+            try FileManager.default.copyItem(at: tempURL, to: dest)
+        } catch {
+            throw FileServiceError.io(error.localizedDescription)
+        }
+    }
+
     /// Atomic write: temp file beside the target, fsync, then swap into place —
     /// a crash mid-write can never truncate the original.
     private func atomicWrite(_ data: Data, to url: URL) throws {
