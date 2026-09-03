@@ -71,6 +71,23 @@ private func makeContainer(name: String, project: String? = nil, workingDir: Str
         #expect(!noView.can(.lifecycle, containerNamed: "bot"))
     }
 
+    @Test func intersectionIsTheDelegationCeiling() {
+        // A delegated grant can never exceed the granter's own permissions.
+        let ceiling = ContainerGrant(view: true, power: true, console: true)  // no files/backups
+        let requested = ContainerGrant(view: true, power: true, files: true, backups: true)
+        let granted = requested.intersection(with: ceiling)
+        #expect(granted.view && granted.power)
+        #expect(!granted.files && !granted.backups)  // clamped away — granter lacked them
+        #expect(!granted.console)  // not requested, so absent even though the ceiling had it
+
+        // set(_:_:) round-trips every case.
+        var g = ContainerGrant()
+        for perm in ContainerPermission.allCases { g.set(perm, true) }
+        #expect(!g.isEmpty && g.view && g.power && g.files && g.console && g.schedules && g.lifecycle && g.backups)
+        g.set(.files, false)
+        #expect(!g.files)
+    }
+
     @Test func nothingWorksWithoutView() {
         // A malformed grant (power without view) must not leak anything.
         let engine = AuthorizationEngine(

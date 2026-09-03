@@ -595,6 +595,29 @@ public final class PanelDataStore: Sendable {
         AuthorizationEngine(isAdmin: user.isAdmin, grants: user.isAdmin ? [:] : (try grants(forUserID: user.id)))
     }
 
+    /// Every user who holds a grant on one container, with that grant. Used to
+    /// enumerate a server's sub-users (owner-managed access delegation).
+    public func grantsForContainer(named containerName: String) throws -> [(userID: Int64, grant: ContainerGrant)] {
+        var result: [(userID: Int64, grant: ContainerGrant)] = []
+        for row in try db.query("SELECT * FROM grants WHERE container_name = ?", [.text(containerName)]) {
+            guard let userID = row["user_id"]?.asInt else { continue }
+            result.append(
+                (
+                    userID: userID,
+                    grant: ContainerGrant(
+                        view: (row["perm_view"]?.asInt ?? 0) != 0,
+                        power: (row["perm_power"]?.asInt ?? 0) != 0,
+                        files: (row["perm_files"]?.asInt ?? 0) != 0,
+                        console: (row["perm_console"]?.asInt ?? 0) != 0,
+                        schedules: (row["perm_schedules"]?.asInt ?? 0) != 0,
+                        lifecycle: (row["perm_lifecycle"]?.asInt ?? 0) != 0,
+                        backups: (row["perm_backups"]?.asInt ?? 0) != 0
+                    )
+                ))
+        }
+        return result
+    }
+
     // MARK: Sessions (tokens are stored hashed; the raw token lives only in the cookie)
 
     public func insertSession(

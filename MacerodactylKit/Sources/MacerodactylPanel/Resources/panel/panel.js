@@ -247,6 +247,7 @@ window.enter = async function (name) {
   if (p.files && detail.filesAvailable) tabs.push(['files', 'Files', '▤']);
   if (p.backups) tabs.push(['backups', 'Backups', '⤓']);
   if (p.schedules) tabs.push(['schedules', 'Schedules', '⏱']);
+  if (detail.canManageSubusers) tabs.push(['users', 'Users', '⚇']);
   tabbar.hidden = false;
   tabbar.replaceChildren(...tabs.map(t => h('button', { class: 'navitem', 'data-t': t[0], onclick: () => setTab(t[0]) },
     h('span', { class: 'tile', text: t[2] }), h('span', { class: 'lbl', text: t[1] }))));
@@ -315,6 +316,7 @@ function render() {
   else if (tab === 'files') { parts.push(h('div', { id: 'files' })); }
   else if (tab === 'backups') { parts.push(h('div', { id: 'backups' }, 'Loading…')); }
   else if (tab === 'schedules') { parts.push(h('div', { id: 'sched' }, 'Loading…')); }
+  else if (tab === 'users') { parts.push(h('div', { id: 'users' }, 'Loading…')); }
   show(parts);
   if (tab === 'logs') startLogs();
   if (tab === 'console') { bindConsole(); startConsole(); }
@@ -322,6 +324,7 @@ function render() {
   if (tab === 'files') listDir('');
   if (tab === 'backups') loadBackups();
   if (tab === 'schedules') loadSchedule();
+  if (tab === 'users') loadSubusers();
 }
 
 // --- console + power + lifecycle -------------------------------------------
@@ -464,6 +467,65 @@ async function deleteBackup(b) {
   if (!confirm('Delete this backup permanently?')) return;
   try { await fetch(api('/backups?uuid=' + enc(b.uuid)), { method: 'DELETE', headers: CSRF }); } catch (e) {}
   loadBackups();
+}
+
+// --- sub-users (owner-managed access delegation) ----------------------------
+const PERM_LABELS = { power: 'Power', console: 'Console', files: 'Files', schedules: 'Schedules', backups: 'Backups', lifecycle: 'Lifecycle' };
+async function loadSubusers() {
+  const host = document.getElementById('users'); if (!host) return;
+  host.replaceChildren(msg('Loading…'));
+  try {
+    const data = await jget(api('/subusers'));
+    const rows = data.subusers.map(u => h('div', { class: 'brow' },
+      h('div', {},
+        h('div', { text: u.username }),
+        h('div', { class: 'sub', text: u.permissions.length ? u.permissions.map(k => PERM_LABELS[k] || k).join(', ') : 'View only' })),
+      h('div', { class: 'bact' },
+        h('button', { onclick: () => editSubuser(data, u) }, 'Edit'),
+        h('button', { class: 'rm', onclick: () => removeSubuser(u) }, 'Remove'))));
+    host.replaceChildren(
+      h('div', { class: 'toolrow' },
+        h('button', { onclick: () => editSubuser(data, null) }, 'Add user'),
+        h('span', { class: 'muted', text: data.subusers.length + ' additional user(s)' })),
+      data.subusers.length ? h('div', {}, ...rows) : msg('No additional users yet. Add an existing account to share access to this server.'));
+  } catch (e) { host.replaceChildren(msg('Failed to load users.', true)); }
+}
+function editSubuser(data, existing) {
+  const host = document.getElementById('users'); if (!host) return;
+  const uname = h('input', { type: 'text', placeholder: 'existing account username', value: existing ? existing.username : '', disabled: !!existing, autocapitalize: 'off', autocorrect: 'off' });
+  const checks = {};
+  const permRows = data.permissionKeys.map(k => {
+    const grantable = k !== 'files' || data.filesGrantable;
+    const cb = h('input', { type: 'checkbox', disabled: !grantable, checked: !!(existing && existing.permissions.includes(k)) });
+    checks[k] = cb;
+    return h('label', { class: 'permrow' }, cb, h('span', { text: (PERM_LABELS[k] || k) + (grantable ? '' : ' — this server has no file access') }));
+  });
+  const err = h('div', { class: 'cerr', hidden: true });
+  const save = async () => {
+    const username = uname.value.trim();
+    if (!username) { err.textContent = 'Enter a username.'; err.hidden = false; return; }
+    const permissions = data.permissionKeys.filter(k => checks[k].checked);
+    try {
+      const r = await fetch(api('/subusers'), { method: 'PUT', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ username, permissions }) });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); err.textContent = j.error || 'Could not save.'; err.hidden = false; return; }
+      loadSubusers();
+    } catch (e) { err.textContent = 'Request failed.'; err.hidden = false; }
+  };
+  host.replaceChildren(
+    h('div', { class: 'subedit' },
+      h('h3', { text: existing ? 'Edit ' + existing.username : 'Add a user' }),
+      h('div', { class: 'field' }, uname),
+      h('div', { class: 'perms' }, ...permRows),
+      h('div', { class: 'note', text: 'Every user also gets view. Grant only what they need — you can never grant more than you hold.' }),
+      err,
+      h('div', { class: 'toolrow' },
+        h('button', { onclick: save }, 'Save'),
+        h('button', { class: 'lnk', onclick: loadSubusers }, 'Cancel'))));
+}
+async function removeSubuser(u) {
+  if (!confirm('Remove ' + u.username + ' from this server? They will lose all access to it.')) return;
+  try { await fetch(api('/subusers/' + enc(u.username)), { method: 'DELETE', headers: CSRF }); } catch (e) {}
+  loadSubusers();
 }
 
 // --- logs (stream + search + download) --------------------------------------

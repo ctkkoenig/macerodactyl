@@ -102,6 +102,12 @@ struct PanelRoutes {
         scoped.get(":name/backups/download", use: apiBackupDownload)
         scoped.post(":name/backups/restore", use: apiBackupRestore)
         scoped.delete(":name/backups", use: apiBackupDelete)
+
+        // Sub-users (owner/admin only; enforced in the handlers, not by the
+        // scope middleware — it maps these to `.view`, which every party holds).
+        scoped.get(":name/subusers", use: apiSubUsersList)
+        scoped.put(":name/subusers", use: apiSubUserSet)
+        scoped.delete(":name/subusers/:username", use: apiSubUserRemove)
         // Destructive lifecycle — all gated on the `.lifecycle` permission via
         // the scope middleware's path mapping. Mutating, so CSRF-protected.
         scoped.post(":name/pull", use: apiPull)
@@ -455,6 +461,8 @@ struct PanelRoutes {
         let stack: String?
         let permissions: Permissions
         let filesAvailable: Bool
+        /// Whether the caller may manage this server's sub-users (owner or admin).
+        let canManageSubusers: Bool
         let memoryLimitBytes: Int64?
         let cpuCores: Double?
         struct Permissions: Encodable { let view, power, files, console, schedules, lifecycle, backups: Bool }
@@ -480,6 +488,7 @@ struct PanelRoutes {
                     backups: engine.can(.backups, containerNamed: name)
                 ),
                 filesAvailable: await containers.fileService(containerName: name) != nil,
+                canManageSubusers: canManageSubUsers(user, serverName: name),
                 memoryLimitBytes: limit?.memoryBytes, cpuCores: limit?.cpuCores
             ))
     }

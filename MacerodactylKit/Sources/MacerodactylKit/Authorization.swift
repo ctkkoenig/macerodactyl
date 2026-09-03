@@ -58,6 +58,30 @@ public struct ContainerGrant: Sendable, Equatable, Codable {
     public var isEmpty: Bool {
         !view && !power && !files && !console && !schedules && !lifecycle && !backups
     }
+
+    /// Sets one permission by case (used when building a grant from a list of
+    /// permission keys).
+    public mutating func set(_ permission: ContainerPermission, _ value: Bool) {
+        switch permission {
+        case .view: view = value
+        case .power: power = value
+        case .files: files = value
+        case .console: console = value
+        case .schedules: schedules = value
+        case .lifecycle: lifecycle = value
+        case .backups: backups = value
+        }
+    }
+
+    /// The permissions held by *both* grants — the ceiling enforcement for
+    /// delegated (sub-user) grants: a granter can never confer more than they
+    /// themselves hold.
+    public func intersection(with other: ContainerGrant) -> ContainerGrant {
+        ContainerGrant(
+            view: view && other.view, power: power && other.power, files: files && other.files,
+            console: console && other.console, schedules: schedules && other.schedules,
+            lifecycle: lifecycle && other.lifecycle, backups: backups && other.backups)
+    }
 }
 
 /// Pure scoping logic — THE security boundary of the web panel. No I/O, no
