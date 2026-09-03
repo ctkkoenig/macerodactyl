@@ -554,7 +554,8 @@ extension PanelRoutes {
                         try? AccountManager(store: store).setGrant(
                             userID: owner.id, containerName: name,
                             grant: ContainerGrant(
-                                view: true, power: true, files: true, console: true, schedules: true, lifecycle: true),
+                                view: true, power: true, files: true, console: true, schedules: true, lifecycle: true,
+                                backups: true),
                             filesGrantable: true)
                     }
                     try? store.recordAudit(

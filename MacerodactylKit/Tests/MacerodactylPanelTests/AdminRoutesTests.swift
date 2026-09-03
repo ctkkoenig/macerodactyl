@@ -160,6 +160,7 @@ import Testing
             #expect(try h.store.serverRecord(name: "mc1")?.status == "active")
             let grant = try #require(try h.store.grants(forUserID: scoped.id)["mc1"])
             #expect(grant.view && grant.power && grant.files && grant.console && grant.lifecycle)
+            #expect(grant.schedules && grant.backups)  // owner gets every permission on their server
             // One allocation consumed.
             #expect(try h.store.allocations(forServer: "mc1").count == 1)
         }
