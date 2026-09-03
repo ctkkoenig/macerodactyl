@@ -1004,6 +1004,7 @@ struct PanelRoutes {
         case .success: "ok"
         case .failed: "failed"
         case .timedOut: "timedOut"
+        case .missed: "missed"
         }
     }
 

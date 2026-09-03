@@ -595,7 +595,7 @@ async function loadActivity() {
     const list = await jget(api('/activity'));
     if (!list.length) { host.replaceChildren(msg('No activity recorded yet.')); return; }
     const rows = list.map(a => {
-      const bad = a.outcome === 'denied' || a.outcome === 'error';
+      const bad = a.outcome === 'denied' || a.outcome === 'error' || a.outcome === 'missed';
       return h('div', { class: 'arow' },
         h('span', { class: 'aic ' + (bad ? 'bad' : 'ok'), text: a.outcome === 'denied' ? '⊘' : bad ? '!' : '✓' }),
         h('div', { class: 'abody' },
@@ -811,8 +811,10 @@ async function loadSchedule() {
   if (s) {
     nodes.push(h('div', { class: 'kv' }, h('span', { class: 'kk', text: 'Current' }), h('span', { class: 'vv', text: s.description })));
     if (s.lastRun) {
-      const cls = s.lastRun.outcome === 'ok' ? 'okrun' : (s.lastRun.outcome === 'timedOut' ? 'timeout' : 'fail');
-      nodes.push(h('div', { class: 'note ' + cls, text: 'Last run ' + s.lastRun.date + ' — ' + s.lastRun.outcome + (s.lastRun.message ? ': ' + s.lastRun.message : '') }));
+      const o = s.lastRun.outcome;
+      const cls = o === 'ok' ? 'okrun' : (o === 'timedOut' || o === 'missed' ? 'timeout' : 'fail');
+      const label = o === 'missed' ? 'Missed' : ('Last run ' + s.lastRun.date + ' — ' + o);
+      nodes.push(h('div', { class: 'note ' + cls, text: label + (s.lastRun.message ? ': ' + s.lastRun.message : '') }));
     }
   }
   const hh = s ? s.hour : 4, mm = s ? s.minute : 0;

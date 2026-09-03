@@ -205,7 +205,7 @@ public enum PanelBackup {
 /// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
 /// scoping, and audit never have to be retrofitted into the data model.
 public enum PanelSchema {
-    public static let currentVersion = 12
+    public static let currentVersion = 13
 
     public static func migrate(_ db: Database) throws {
         if db.userVersion < 1 {
@@ -505,6 +505,24 @@ public enum PanelSchema {
                 """)
             db.userVersion = 12
         }
+        if db.userVersion < 13 {
+            // When a schedule was created, so the in-process scheduler can tell a
+            // fire it genuinely MISSED (the daemon was down at the fire time) from
+            // a slot that simply predates the schedule. Existing rows are backfilled
+            // to "now" so an upgrade never retroactively reports old slots as missed.
+            try db.execute("ALTER TABLE schedules ADD COLUMN created_at TEXT")
+            try db.run(
+                "UPDATE schedules SET created_at = ? WHERE created_at IS NULL",
+                [.text(PanelSchema.nowISO())])
+            db.userVersion = 13
+        }
+    }
+
+    /// Current time as the ISO8601 string the schedule/audit columns use.
+    static func nowISO() -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.string(from: Date())
     }
 }
 

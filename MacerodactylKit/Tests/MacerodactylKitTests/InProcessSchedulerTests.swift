@@ -116,6 +116,60 @@ import Testing
         #expect(await fireCount.total == 1)
     }
 
+    @Test func surfacesAFireMissedWhileTheDaemonWasDown() async throws {
+        // The schedule is created "now" (real time), but the scheduler's clock is
+        // far in the future — so its 03:00 slot passed while nothing was running.
+        let store = try store()
+        try store.upsertSchedule(containerName: "bot", hour: 3, minute: 0, weekdays: [])
+        let fireCount = Counter()
+        let scheduler = InProcessScheduler(
+            store: store, calendar: utcCalendar,
+            restart: { name in
+                await fireCount.bump(name)
+                return .success(name)
+            })
+
+        // A tick at 09:00 sees that 03:00 was missed → records it, but does NOT
+        // fire the restart (a missed restart is surfaced, never auto-run).
+        _ = await scheduler.tick(at: date("2099-06-15T09:00:00Z"))
+        #expect(await fireCount.total == 0)
+        let row = try #require(try store.schedule(containerName: "bot"))
+        #expect(row.lastOutcome == "missed")
+        // It's durably in the audit trail too (survives the next run overwriting
+        // the row), marked as a denial-class outcome.
+        let audit = try store.listAudit(containerName: "bot")
+        #expect(audit.contains { $0.action == "container.schedules" && $0.outcome == "missed" })
+
+        // A second tick at the same time does NOT re-record the same miss.
+        _ = await scheduler.tick(at: date("2099-06-15T09:00:00Z"))
+        #expect(try store.listAudit(containerName: "bot").filter { $0.outcome == "missed" }.count == 1)
+    }
+
+    @Test func doesNotFlagTheCurrentMinuteAsMissedAndAuditsRealFires() async throws {
+        let store = try store()
+        try store.upsertSchedule(containerName: "bot", hour: 3, minute: 0, weekdays: [])
+        let scheduler = InProcessScheduler(
+            store: store, calendar: utcCalendar, restart: { _ in .success("ok") })
+        // Ticking exactly at 03:00 fires normally and is NOT reported as missed.
+        #expect(await scheduler.tick(at: date("2099-06-15T03:00:00Z")) == ["bot"])
+        let audit = try store.listAudit(containerName: "bot")
+        #expect(audit.contains { $0.action == "container.schedules" && $0.outcome == "ok" })
+        #expect(!audit.contains { $0.outcome == "missed" })
+    }
+
+    @Test func lastExpectedFireFindsTheMostRecentPastSlot() {
+        let cal = utcCalendar
+        // Empty weekdays: yesterday's 04:30 when now is before today's 04:30.
+        let before = date("2099-06-15T03:00:00Z")
+        let e1 = ScheduleEvaluator.lastExpectedFire(
+            before: before, scheduleHour: 4, scheduleMinute: 30, weekdays: [], calendar: cal)
+        #expect(e1 == date("2099-06-14T04:30:00Z"))
+        // After today's slot → today's.
+        let e2 = ScheduleEvaluator.lastExpectedFire(
+            before: date("2099-06-15T05:00:00Z"), scheduleHour: 4, scheduleMinute: 30, weekdays: [], calendar: cal)
+        #expect(e2 == date("2099-06-15T04:30:00Z"))
+    }
+
     @Test func recordsTimeoutOutcome() async throws {
         let store = try store()
         try store.upsertSchedule(containerName: "bot", hour: 1, minute: 0, weekdays: [])

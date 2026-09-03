@@ -15,12 +15,16 @@ extension PanelDataStore {
         public var lastRunAt: String?
         public var lastOutcome: String?
         public var lastMessage: String?
+        /// When the schedule was created (ISO8601), so a genuinely missed fire can
+        /// be told apart from a slot that predates the schedule.
+        public var createdAt: String?
 
         public var id: String { containerName }
 
         public init(
             containerName: String, hour: Int, minute: Int, weekdays: Set<Int>,
-            lastRunAt: String? = nil, lastOutcome: String? = nil, lastMessage: String? = nil
+            lastRunAt: String? = nil, lastOutcome: String? = nil, lastMessage: String? = nil,
+            createdAt: String? = nil
         ) {
             self.containerName = containerName
             self.hour = hour
@@ -29,6 +33,7 @@ extension PanelDataStore {
             self.lastRunAt = lastRunAt
             self.lastOutcome = lastOutcome
             self.lastMessage = lastMessage
+            self.createdAt = createdAt
         }
     }
 
@@ -48,23 +53,28 @@ extension PanelDataStore {
             weekdays: Self.decodeWeekdays(row["weekdays"]?.asString),
             lastRunAt: row["last_run_at"]?.asString,
             lastOutcome: row["last_outcome"]?.asString,
-            lastMessage: row["last_message"]?.asString)
+            lastMessage: row["last_message"]?.asString,
+            createdAt: row["created_at"]?.asString)
     }
 
     /// Creates or replaces the schedule for a container. Run history is cleared
     /// on a re-set, matching launchd (a rewritten agent has no prior result yet).
     public func upsertSchedule(containerName: String, hour: Int, minute: Int, weekdays: Set<Int>) throws {
+        // created_at is refreshed on every (re)set: a schedule just defined can't
+        // have "missed" a fire that occurred before it existed in this form.
         try db.run(
             """
-            INSERT INTO schedules (container_name, hour, minute, weekdays)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO schedules (container_name, hour, minute, weekdays, created_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(container_name) DO UPDATE SET
                 hour=excluded.hour, minute=excluded.minute, weekdays=excluded.weekdays,
+                created_at=excluded.created_at,
                 last_run_at=NULL, last_outcome=NULL, last_message=NULL
             """,
             [
                 .text(containerName), .integer(Int64(min(max(hour, 0), 23))),
                 .integer(Int64(min(max(minute, 0), 59))), .text(Self.encodeWeekdays(weekdays)),
+                .text(PanelSchema.nowISO()),
             ])
     }
 

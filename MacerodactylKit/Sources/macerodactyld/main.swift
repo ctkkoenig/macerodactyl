@@ -84,7 +84,12 @@ logger.notice("macerodactyld serving \(scheme) on \(host):\(config.port) — doc
 do {
     try await server.runUntilTerminated(
         config: .init(port: config.port, bindLAN: config.bindLAN, tls: tlsFiles), logger: logger)
+    // Graceful stop: cancel the loop, then WAIT for any in-flight restart to
+    // finish recording its outcome before the process exits (a SIGKILL can't be
+    // drained — nothing can — but a normal SIGTERM shutdown no longer loses the
+    // record of a restart it was in the middle of firing).
     schedulerTask.cancel()
+    _ = await schedulerTask.value
 } catch {
     schedulerTask.cancel()
     fail("server error: \(error)")

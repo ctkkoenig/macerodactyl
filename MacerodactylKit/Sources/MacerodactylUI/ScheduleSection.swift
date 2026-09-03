@@ -87,6 +87,13 @@ struct ScheduleSection: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.orange)
+            case .missed:
+                Label(
+                    "Missed a scheduled run — the panel wasn't running at the fire time. \(lastResult.message)",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
             }
         } else {
             Text("Hasn't run yet")

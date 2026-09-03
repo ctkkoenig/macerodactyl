@@ -240,6 +240,7 @@ case "schedule-status":
             case .success: "OK"
             case .failed: "FAILED"
             case .timedOut: "TIMED OUT"
+            case .missed: "MISSED"
             }
         print("last run: \(result.date.formatted()) \(label) — \(result.message)")
     } else {

@@ -152,6 +152,7 @@ public struct DaemonContainerService: ContainerService {
             switch row.lastOutcome {
             case "ok": .success
             case "timedOut": .timedOut
+            case "missed": .missed
             default: .failed
             }
         return ScheduleRunResult(date: date, outcome: outcome, message: row.lastMessage ?? "")

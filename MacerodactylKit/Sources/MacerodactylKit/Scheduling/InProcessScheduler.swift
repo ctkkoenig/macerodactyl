@@ -16,6 +16,26 @@ public enum ScheduleEvaluator {
         let launchdWeekday = calendarWeekday - 1  // 1=Sun → 0=Sun
         return weekdays.contains(launchdWeekday)
     }
+
+    /// The most recent moment at or before `now` when this schedule was due, or
+    /// nil if none in the last week. Used to detect a fire the daemon MISSED
+    /// while it was down: if that moment is newer than the last recorded run, the
+    /// scheduled restart never happened and should be surfaced.
+    public static func lastExpectedFire(
+        before now: Date, scheduleHour: Int, scheduleMinute: Int, weekdays: Set<Int>, calendar: Calendar
+    ) -> Date? {
+        for dayOffset in 0...7 {
+            guard let day = calendar.date(byAdding: .day, value: -dayOffset, to: now) else { continue }
+            var comps = calendar.dateComponents([.year, .month, .day], from: day)
+            comps.hour = scheduleHour
+            comps.minute = scheduleMinute
+            comps.second = 0
+            guard let candidate = calendar.date(from: comps), candidate <= now else { continue }
+            let weekday = calendar.component(.weekday, from: candidate)
+            if weekdays.isEmpty || weekdays.contains(weekday - 1) { return candidate }
+        }
+        return nil
+    }
 }
 
 /// Outcome of firing one scheduled restart, mirroring `ScheduleOutcome` but
@@ -81,11 +101,12 @@ public actor InProcessScheduler {
             format: "%04d-%02d-%02d %02d:%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0, c.hour ?? 0, c.minute ?? 0)
     }
 
-    /// One evaluation pass: fire every schedule due at `date` that hasn't already
-    /// fired this minute, recording each outcome. Returns the containers fired
-    /// (for tests/telemetry).
+    /// One evaluation pass: first surface any fire missed while the daemon was
+    /// down, then fire every schedule due at `date` that hasn't already fired this
+    /// minute, recording each outcome. Returns the containers fired.
     @discardableResult
     public func tick(at date: Date) async -> [String] {
+        reconcileMissedRuns(now: date)
         let components = calendar.dateComponents([.hour, .minute, .weekday], from: date)
         guard let nowHour = components.hour, let nowMinute = components.minute, let weekday = components.weekday
         else { return [] }
@@ -104,9 +125,62 @@ public actor InProcessScheduler {
             try? store.recordScheduleRun(
                 containerName: schedule.containerName, at: iso(date), outcome: outcome.dbOutcome,
                 message: outcome.message)
+            // A durable audit entry too, so every scheduled restart shows in the
+            // server's Activity log — not just the transient last-run on the row.
+            try? store.recordAudit(
+                username: "scheduler", action: "container.schedules", containerName: schedule.containerName,
+                outcome: outcome.dbOutcome == "ok" ? "ok" : "error", sourceIP: nil,
+                detail: "scheduled restart: \(outcome.message)")
             fired.append(schedule.containerName)
         }
         return fired
+    }
+
+    /// Detects and surfaces a fire the daemon MISSED because it wasn't running at
+    /// the fire time (the in-process scheduler, unlike launchd, only ticks while
+    /// the daemon is up). For each schedule whose most recent due moment is newer
+    /// than its last recorded run — and newer than when the schedule was created —
+    /// records a durable "missed" run + audit entry, exactly once per missed slot.
+    /// It never auto-fires the missed restart: starting a container the operator
+    /// left stopped would violate the "never start containers at boot" rule, so a
+    /// miss is made visible rather than silently acted on.
+    private func reconcileMissedRuns(now: Date) {
+        let schedules = (try? store.listSchedules()) ?? []
+        for schedule in schedules {
+            guard
+                let expected = ScheduleEvaluator.lastExpectedFire(
+                    before: now, scheduleHour: schedule.hour, scheduleMinute: schedule.minute,
+                    weekdays: schedule.weekdays, calendar: calendar)
+            else { continue }
+            // Don't flag the minute this tick is about to fire normally.
+            if minuteKey(expected) == minuteKey(now) { continue }
+            // Only a schedule that already existed at the fire time can have missed
+            // it; an unknown creation time (shouldn't happen post-migration) is not
+            // flagged rather than risk a false alarm.
+            guard let createdAt = parseISO(schedule.createdAt), expected > createdAt else { continue }
+            // Already ran (or already recorded a miss) at/after this slot?
+            let lastRun = parseISO(schedule.lastRunAt) ?? .distantPast
+            guard lastRun < expected else { continue }
+            let when = String(format: "%02d:%02d", schedule.hour, schedule.minute)
+            let message = "missed scheduled restart (\(when)) — the panel was not running at the fire time"
+            try? store.recordScheduleRun(
+                containerName: schedule.containerName, at: iso(expected), outcome: "missed", message: message)
+            try? store.recordAudit(
+                username: "scheduler", action: "container.schedules", containerName: schedule.containerName,
+                outcome: "missed", sourceIP: nil, detail: message)
+        }
+    }
+
+    private func parseISO(_ string: String?) -> Date? {
+        guard let string else { return nil }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: string)
+            ?? {
+                let g = ISO8601DateFormatter()
+                g.formatOptions = [.withInternetDateTime]
+                return g.date(from: string)
+            }()
     }
 
     /// Runs the loop until the task is cancelled. Wakes a few times a minute so a
