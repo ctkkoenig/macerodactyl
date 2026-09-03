@@ -81,6 +81,56 @@ case "daemon":
         if let path = manager.installedBinaryPath() { print("binary: \(path)") }
     }
 
+case "provision":
+    // Live provisioning smoke test. FIXTURE ONLY — always point stacksRoot at a
+    // scratch directory, never the user's real ~/stacks.
+    //   paneltool provision <egg.json> <name> <scratch-stacks-root> [memoryMiB] [port]
+    guard args.count >= 4 else {
+        print("usage: paneltool provision <egg.json> <name> <scratch-stacks-root> [memoryMiB] [port]")
+        exit(64)
+    }
+    let eggPath = args[1]
+    let serverName = args[2]
+    let scratchRoot = URL(fileURLWithPath: (args[3] as NSString).expandingTildeInPath)
+    let memoryMiB = args.count > 4 ? (Int(args[4]) ?? 1024) : 1024
+    let port = args.count > 5 ? (Int(args[5]) ?? 25565) : 25565
+
+    guard let dockerURL = DockerBinaryLocator.resolve() else {
+        print("could not locate the docker binary")
+        exit(1)
+    }
+    let rawEgg = try String(contentsOf: URL(fileURLWithPath: eggPath), encoding: .utf8)
+    let egg = try EggParser.parse(rawEgg)
+    for warning in EggValidator.validate(egg) { print("⚠︎ \(warning.message)") }
+    guard let image = egg.defaultImage else {
+        print("egg declares no docker image")
+        exit(1)
+    }
+    let runtime = ServerRuntimeContext(memoryMiB: memoryMiB, port: port, uuid: UUID().uuidString)
+    let resolved = VariableResolver.resolveStartup(egg: egg, values: [:], runtime: runtime)
+    let spec = ProvisionSpec(
+        name: serverName, image: image, startup: resolved.startup.value, environment: resolved.environment,
+        install: egg.install, limits: ServerLimits(memoryMiB: memoryMiB),
+        portMappings: [PortMapping(hostIP: "127.0.0.1", hostPort: port, containerPort: port)])
+    try FileManager.default.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
+    print("Provisioning \"\(serverName)\" from \(egg.name) [\(image)] into \(scratchRoot.path)")
+    let service = DaemonContainerService(cli: DockerCLI(binary: dockerURL), stacksRoot: scratchRoot)
+    for try await line in await service.provision(spec) { print(line) }
+
+case "deprovision":
+    guard args.count == 3 else {
+        print("usage: paneltool deprovision <name> <scratch-stacks-root>")
+        exit(64)
+    }
+    guard let dockerURL = DockerBinaryLocator.resolve() else {
+        print("could not locate the docker binary")
+        exit(1)
+    }
+    let scratchRoot = URL(fileURLWithPath: (args[2] as NSString).expandingTildeInPath)
+    let service = DaemonContainerService(cli: DockerCLI(binary: dockerURL), stacksRoot: scratchRoot)
+    try await service.deprovision(name: args[1])
+    print("deprovisioned \(args[1])")
+
 case "db":
     switch args.count >= 2 ? args[1] : "check" {
     case "check", "integrity":

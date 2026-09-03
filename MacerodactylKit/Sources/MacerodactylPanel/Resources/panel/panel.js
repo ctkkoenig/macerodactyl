@@ -196,6 +196,7 @@ function maintenanceCard() {
   return h('div', {},
     h('h2', { class: 'section', text: 'Maintenance (admin)' }),
     h('div', { class: 'filebar' },
+      h('a', { class: 'btnlink', href: '/admin', text: 'Manage servers in browser' }),
       h('button', { text: 'Disk usage', onclick: showDisk }),
       h('button', { text: 'Prune dangling images', onclick: pruneImages })));
 }

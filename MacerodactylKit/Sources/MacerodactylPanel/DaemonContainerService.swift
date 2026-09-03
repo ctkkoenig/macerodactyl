@@ -135,4 +135,16 @@ public struct DaemonContainerService: ContainerService {
 
     public func imagePrune() async throws -> String { try await ContainerLifecycle.imagePrune(cli: cli) }
     public func diskUsage() async throws -> String { try await ContainerLifecycle.diskUsage(cli: cli) }
+
+    public func provision(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        ServerProvisioner(cli: cli, stacksRoot: stacksRoot).provision(spec)
+    }
+
+    public func deprovision(name: String) async throws {
+        try await ServerProvisioner(cli: cli, stacksRoot: stacksRoot).deprovision(name: name)
+    }
+
+    public func stackExists(name: String) async -> Bool {
+        FileManager.default.fileExists(atPath: stacksRoot.appendingPathComponent(name).path)
+    }
 }

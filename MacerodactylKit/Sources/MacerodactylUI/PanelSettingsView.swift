@@ -47,8 +47,17 @@ public struct PanelSettingsView: View {
                     .textSelection(.enabled)
             }
             if model.enabled {
-                Button("Copy local URL") { model.copyLocalURL() }
-                    .controlSize(.small)
+                HStack {
+                    Button("Copy local URL") { model.copyLocalURL() }
+                        .controlSize(.small)
+                    Button("Manage servers in browser…") { model.openAdmin() }
+                        .controlSize(.small)
+                }
+                Text(
+                    "Creating servers from eggs, and managing nests, users, allocations, and panel settings, is done in the browser admin panel."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             HStack {

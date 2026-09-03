@@ -156,6 +156,35 @@ import Testing
             ContainerStats(
                 name: "x", cpuPercent: 0, memUsedBytes: 0, memLimitBytes: 0, memPercent: 0,
                 netRxBytes: 0, netTxBytes: 0, pids: 0, measuredAt: Date()))
-        #expect(PanelSchema.currentVersion == 7)
+        #expect(PanelSchema.currentVersion == 8)
+    }
+
+    @Test func migratesV7ToV8SeedingTheSelfNodeAndProvisioningTables() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let path = dir.appending(path: "v8.sqlite").path
+        // A minimal pre-v8 database (just enough of the v1 base + user_version=7).
+        do {
+            let db = try Database(path: path)
+            try db.execute(
+                """
+                CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL, is_admin INTEGER NOT NULL DEFAULT 0, created_at TEXT);
+                """)
+            db.userVersion = 7
+        }
+        // Opening runs the v8 migration.
+        let store = try PanelDataStore(databasePath: path)
+        // The single self-node row is seeded with defaults.
+        let node = try store.nodeConfig()
+        #expect(node.hostIP == "127.0.0.1")
+        #expect(node.portRangeStart == 25565)
+        #expect(node.portRangeEnd == 25700)
+        // The new tables exist and are writable.
+        let nest = try store.createNest(name: "Minecraft", author: nil, description: nil)
+        #expect(try store.listNests().count == 1)
+        #expect(nest > 0)
+        // Global settings default cleanly with no rows.
+        #expect(try store.globalSettings().require2FA == .off)
     }
 }

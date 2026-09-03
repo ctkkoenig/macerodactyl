@@ -14,16 +14,19 @@ enum PanelAssets {
     enum Asset: String, CaseIterable {
         case appHTML = "app.html"
         case loginHTML = "login.html"
+        case adminHTML = "admin.html"
         case panelCSS = "panel.css"
         case loginCSS = "login.css"
+        case adminCSS = "admin.css"
         case panelJS = "panel.js"
         case loginJS = "login.js"
+        case adminJS = "admin.js"
 
         var contentType: String {
             switch self {
-            case .appHTML, .loginHTML: "text/html; charset=utf-8"
-            case .panelCSS, .loginCSS: "text/css; charset=utf-8"
-            case .panelJS, .loginJS: "application/javascript; charset=utf-8"
+            case .appHTML, .loginHTML, .adminHTML: "text/html; charset=utf-8"
+            case .panelCSS, .loginCSS, .adminCSS: "text/css; charset=utf-8"
+            case .panelJS, .loginJS, .adminJS: "application/javascript; charset=utf-8"
             }
         }
     }

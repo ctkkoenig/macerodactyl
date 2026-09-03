@@ -99,6 +99,14 @@ public final class PanelAdminModel {
     public func copyLocalURL() { setPasteboard(controller.localURL) }
     public func copyFirstAdminPassword() { if let p = firstAdminPassword { setPasteboard(p) } }
 
+    /// Opens the browser admin panel (`/admin`) — the primary place to create
+    /// servers from eggs and manage nests, users, allocations, and settings. The
+    /// native app stays lean; the full admin experience lives in the browser.
+    public func openAdmin() {
+        let base = controller.localURL.hasSuffix("/") ? String(controller.localURL.dropLast()) : controller.localURL
+        if let url = URL(string: base + "/admin") { NSWorkspace.shared.open(url) }
+    }
+
     // MARK: Accounts
 
     public var canCreateUser: Bool { !newUsername.isEmpty && newPassword.count >= 8 }

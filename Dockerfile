@@ -46,8 +46,18 @@ FROM swift:6.1-jammy-slim AS runtime
 # libsqlite3, openssl (self-signed TLS), and the docker CLI (the panel shells
 # out to it) + ca-certificates for image pulls.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libsqlite3-0 openssl ca-certificates docker.io \
+ && apt-get install -y --no-install-recommends libsqlite3-0 openssl ca-certificates curl docker.io \
  && rm -rf /var/lib/apt/lists/*
+# The docker compose v2 plugin — server provisioning runs `docker compose up`,
+# and `docker.io` ships the CLI without it. The final `docker compose version`
+# fails the build if the plugin didn't install cleanly. (Provisioning also needs
+# the stacks root bind-mounted at a matching host path; see docs/DOCKER.md.)
+ARG COMPOSE_VERSION=v2.29.7
+RUN mkdir -p /usr/libexec/docker/cli-plugins \
+ && curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-$(uname -m)" \
+      -o /usr/libexec/docker/cli-plugins/docker-compose \
+ && chmod +x /usr/libexec/docker/cli-plugins/docker-compose \
+ && docker compose version
 WORKDIR /app
 COPY --from=build /out/ /app/
 ENV PATH="/app:${PATH}"

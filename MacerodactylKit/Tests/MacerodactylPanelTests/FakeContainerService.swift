@@ -135,6 +135,28 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
         return pruneResult
     }
     func diskUsage() async throws -> String { diskResult }
+
+    // Provisioning — records the spec and streams a scripted install log so route
+    // tests run end-to-end without docker. `existingStacks` simulates name clashes.
+    private(set) var provisionSpecs: [ProvisionSpec] = []
+    private(set) var deprovisioned: [String] = []
+    var existingStacks: Set<String> = []
+    var provisionShouldFail = false
+    func provision(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        lock.withLock { provisionSpecs.append(spec) }
+        if provisionShouldFail {
+            return AsyncThrowingStream { continuation in
+                continuation.yield("» Preparing \(spec.name)…")
+                continuation.yield("✖ Provisioning failed: docker exited 1")
+                continuation.finish(throwing: ContainerServiceError.unavailable("install failed"))
+            }
+        }
+        return cannedStream(["» Preparing \(spec.name)…", "» Starting the server…", "✔ Server \"\(spec.name)\" created."])
+    }
+    func deprovision(name: String) async throws {
+        lock.withLock { deprovisioned.append(name) }
+    }
+    func stackExists(name: String) async -> Bool { existingStacks.contains(name) }
 }
 
 extension DockerContainer {

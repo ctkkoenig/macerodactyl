@@ -30,6 +30,15 @@ import Testing
         }
     }
 
+    @Test func adminJSHasNoHTMLInjectionSinks() {
+        let js = PanelAssets.string(.adminJS)
+        #expect(!js.isEmpty)
+        for sink in ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"] {
+            #expect(!js.contains(sink), "admin.js must not use \(sink) — build DOM with h()/textContent instead")
+        }
+        #expect(js.contains("textContent"))
+    }
+
     @Test func allAssetsLoadAndAreNonEmpty() {
         for asset in PanelAssets.Asset.allCases {
             #expect(!PanelAssets.string(asset).isEmpty, "\(asset.rawValue) should load from the bundle")

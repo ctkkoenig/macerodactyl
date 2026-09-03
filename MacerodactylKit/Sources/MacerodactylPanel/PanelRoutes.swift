@@ -49,6 +49,12 @@ struct PanelRoutes {
         router.get("assets/panel.js", use: { _, _ in Self.asset(.panelJS) })
         router.get("assets/login.css", use: { _, _ in Self.asset(.loginCSS) })
         router.get("assets/login.js", use: { _, _ in Self.asset(.loginJS) })
+        router.get("assets/admin.css", use: { _, _ in Self.asset(.adminCSS) })
+        router.get("assets/admin.js", use: { _, _ in Self.asset(.adminJS) })
+        // The admin SPA shell — a separate bundle from the phone panel. The HTML
+        // is public client code (no secrets); a non-admin who loads it is bounced
+        // client-side, and every /api/admin/* call it makes is RequireAdmin-gated.
+        router.get("admin", use: appPageAdmin)
 
         let api = router.group("api").add(middleware: RequireAuth())
         api.get("me", use: apiMe)
@@ -97,6 +103,8 @@ struct PanelRoutes {
         let admin = api.group("maintenance").add(middleware: RequireAdmin())
         admin.get("disk", use: apiDiskUsage)
         admin.post("image-prune", use: apiImagePrune)
+
+        registerAdmin(on: api)
     }
 
     // MARK: HTML pages
@@ -113,6 +121,15 @@ struct PanelRoutes {
     @Sendable func appPage(_ request: Request, context: PanelRequestContext) async throws -> Response {
         guard context.identity != nil else { return redirect("/login") }
         return html(PanelAssets.string(.appHTML))
+    }
+
+    /// The admin SPA shell. Non-signed-in → login; signed-in-but-not-admin →
+    /// bounced back to the phone panel (the HTML itself carries no privileged
+    /// data — the admin JSON API behind it is what enforces access).
+    @Sendable func appPageAdmin(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        guard let user = context.identity else { return redirect("/login") }
+        guard user.isAdmin else { return redirect("/me") }
+        return html(PanelAssets.string(.adminHTML))
     }
 
     /// Serves a static frontend asset with its content type. `no-cache` (i.e.
@@ -202,6 +219,27 @@ struct PanelRoutes {
             try? store.setTOTPLastStep(userID: user.id, step: step)
         }
 
+        // Global 2FA policy for accounts that don't have their own 2FA. `force`
+        // lets them in but flags that they must enroll now; `deny_non_2fa` refuses
+        // outright. A grace exception admits the sole admin (so a freshly-set
+        // policy can never lock the only account out before it can enroll).
+        var mustEnroll2FA = false
+        let policy = (try? store.globalSettings().require2FA) ?? .off
+        if policy != .off, !totp.enabled {
+            let soleAdmin = ((try? store.listUsers())?.count ?? 0) == 1 && user.isAdmin
+            if soleAdmin {
+                mustEnroll2FA = true
+                audit(user: user.username, action: "login.2fa_grace", outcome: "ok", ip: ip)
+            } else if policy == .denyNon2FA {
+                audit(user: user.username, action: "login.2fa_denied", outcome: "denied", ip: ip)
+                return json(
+                    ["error": "This panel requires two-factor authentication. Ask an admin to enroll you."],
+                    status: .forbidden)
+            } else {
+                mustEnroll2FA = true
+            }
+        }
+
         await rateLimiter.recordSuccess(username: body.username, ip: ip)
         let token = PanelSession.newToken()
         let userAgent = request.headers[.userAgent].map { String($0.prefix(256)) }
@@ -210,7 +248,7 @@ struct PanelRoutes {
             ip: ip, userAgent: userAgent)
         audit(user: user.username, action: "login.success", outcome: "ok", ip: ip)
 
-        var response = json(["ok": true])
+        var response = json(["ok": true, "mustEnroll2FA": mustEnroll2FA])
         response.setCookie(sessionCookie(token: token))
         return response
     }
@@ -1078,9 +1116,9 @@ struct PanelRoutes {
     /// A bare 404 with no body — identical whether it comes from the scope
     /// middleware (ungranted) or a handler (genuinely nonexistent), so the two
     /// cases are indistinguishable to the caller.
-    private func notFound() -> HTTPError { HTTPError(.notFound) }
+    func notFound() -> HTTPError { HTTPError(.notFound) }
 
-    private func audit(user: String, action: String, container: String? = nil, outcome: String, ip: String, detail: String? = nil) {
+    func audit(user: String, action: String, container: String? = nil, outcome: String, ip: String, detail: String? = nil) {
         try? store.recordAudit(
             username: user, action: action, containerName: container,
             outcome: outcome, sourceIP: ip, detail: detail)
@@ -1103,17 +1141,17 @@ struct PanelRoutes {
             secure: secureCookies, httpOnly: true, sameSite: .lax)
     }
 
-    private func redirect(_ location: String) -> Response {
+    func redirect(_ location: String) -> Response {
         Response(status: .seeOther, headers: [.location: location])
     }
 
-    private func html(_ body: String) -> Response {
+    func html(_ body: String) -> Response {
         Response(
             status: .ok, headers: [.contentType: "text/html; charset=utf-8"],
             body: .init(byteBuffer: ByteBuffer(string: body)))
     }
 
-    private func json(_ object: [String: some Encodable & Sendable], status: HTTPResponse.Status = .ok) -> Response {
+    func json(_ object: [String: some Encodable & Sendable], status: HTTPResponse.Status = .ok) -> Response {
         let data = (try? JSONSerialization.data(withJSONObject: object.mapValues { anyify($0) })) ?? Data("{}".utf8)
         return Response(
             status: status, headers: [.contentType: "application/json"],
@@ -1126,7 +1164,7 @@ struct PanelRoutes {
         return String(describing: value)
     }
 
-    private func encode(_ value: some Encodable, status: HTTPResponse.Status = .ok) -> Response {
+    func encode(_ value: some Encodable, status: HTTPResponse.Status = .ok) -> Response {
         let data = (try? JSONEncoder().encode(value)) ?? Data("{}".utf8)
         return Response(
             status: status, headers: [.contentType: "application/json"],

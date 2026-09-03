@@ -205,7 +205,7 @@ public enum PanelBackup {
 /// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
 /// scoping, and audit never have to be retrofitted into the data model.
 public enum PanelSchema {
-    public static let currentVersion = 7
+    public static let currentVersion = 8
 
     public static func migrate(_ db: Database) throws {
         if db.userVersion < 1 {
@@ -311,6 +311,135 @@ public enum PanelSchema {
             try db.execute("ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0")
             db.userVersion = 7
         }
+        if db.userVersion < 8 {
+            // Server provisioning + the web admin panel. Eggs/nests (imported
+            // Pterodactyl egg JSON, kept byte-faithful in `raw_json`), the single
+            // self-node + its allocation pool, provisioned `server_records` and
+            // their variables, plus admin objects (locations, databases, mounts)
+            // and a key/value `panel_settings` for global policy.
+            try db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS panel_settings (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT
+                );
+                CREATE TABLE IF NOT EXISTS locations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    short TEXT NOT NULL UNIQUE,
+                    description TEXT
+                );
+                CREATE TABLE IF NOT EXISTS nodes (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    name TEXT NOT NULL DEFAULT 'local',
+                    location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+                    host_ip TEXT NOT NULL DEFAULT '127.0.0.1',
+                    port_range_start INTEGER NOT NULL DEFAULT 25565,
+                    port_range_end   INTEGER NOT NULL DEFAULT 25700
+                );
+                CREATE TABLE IF NOT EXISTS nests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    uuid TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    author TEXT,
+                    description TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE TABLE IF NOT EXISTS eggs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    nest_id INTEGER NOT NULL REFERENCES nests(id) ON DELETE CASCADE,
+                    uuid TEXT,
+                    name TEXT NOT NULL,
+                    author TEXT,
+                    description TEXT,
+                    meta_version TEXT,
+                    docker_images_json TEXT NOT NULL,
+                    startup TEXT NOT NULL,
+                    config_files TEXT,
+                    done_strings_json TEXT,
+                    config_logs TEXT,
+                    config_stop TEXT,
+                    script_install TEXT,
+                    script_container TEXT,
+                    script_entrypoint TEXT,
+                    features_json TEXT,
+                    file_denylist_json TEXT,
+                    raw_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE TABLE IF NOT EXISTS egg_variables (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    egg_id INTEGER NOT NULL REFERENCES eggs(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    env_variable TEXT NOT NULL,
+                    default_value TEXT,
+                    user_viewable INTEGER NOT NULL DEFAULT 1,
+                    user_editable INTEGER NOT NULL DEFAULT 1,
+                    rules TEXT,
+                    sort INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS server_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    uuid TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL UNIQUE,
+                    egg_id INTEGER REFERENCES eggs(id) ON DELETE SET NULL,
+                    docker_image TEXT NOT NULL,
+                    owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                    memory_mib INTEGER NOT NULL DEFAULT 0,
+                    swap_mib INTEGER NOT NULL DEFAULT 0,
+                    disk_mib INTEGER NOT NULL DEFAULT 0,
+                    cpu_percent INTEGER NOT NULL DEFAULT 0,
+                    cpu_pinning TEXT,
+                    io_weight INTEGER,
+                    pids_limit INTEGER,
+                    oom_disabled INTEGER NOT NULL DEFAULT 0,
+                    startup TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'installing',
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE TABLE IF NOT EXISTS server_variables (
+                    server_id INTEGER NOT NULL REFERENCES server_records(id) ON DELETE CASCADE,
+                    env_variable TEXT NOT NULL,
+                    value TEXT,
+                    PRIMARY KEY (server_id, env_variable)
+                );
+                CREATE TABLE IF NOT EXISTS allocations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ip TEXT NOT NULL,
+                    port INTEGER NOT NULL,
+                    proto TEXT NOT NULL DEFAULT 'tcp',
+                    server_name TEXT,
+                    is_primary INTEGER NOT NULL DEFAULT 0,
+                    notes TEXT,
+                    UNIQUE (ip, port, proto)
+                );
+                CREATE TABLE IF NOT EXISTS server_databases (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    server_id INTEGER NOT NULL REFERENCES server_records(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    host TEXT,
+                    port INTEGER,
+                    username TEXT,
+                    remote TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE TABLE IF NOT EXISTS mounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    read_only INTEGER NOT NULL DEFAULT 0,
+                    description TEXT
+                );
+                CREATE TABLE IF NOT EXISTS server_mounts (
+                    server_id INTEGER NOT NULL REFERENCES server_records(id) ON DELETE CASCADE,
+                    mount_id INTEGER NOT NULL REFERENCES mounts(id) ON DELETE CASCADE,
+                    PRIMARY KEY (server_id, mount_id)
+                );
+                INSERT OR IGNORE INTO nodes (id) VALUES (1);
+                """)
+            db.userVersion = 8
+        }
     }
 }
 
@@ -334,7 +463,9 @@ public struct AuditEntry: Sendable, Equatable, Identifiable {
 
 /// Typed access to panel state (users, grants, sessions, audit) over Database.
 public final class PanelDataStore: Sendable {
-    private let db: Database
+    // Internal (not private) so the provisioning CRUD extension in its own file
+    // can reach the same serialized connection.
+    let db: Database
 
     public init(databasePath: String) throws {
         self.db = try Database(path: databasePath)

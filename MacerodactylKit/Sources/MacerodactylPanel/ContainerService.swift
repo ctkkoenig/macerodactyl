@@ -52,12 +52,31 @@ public protocol ContainerService: Sendable {
     /// Removes the container (must be stopped). Throws on conflict/failure.
     func remove(containerName: String) async throws
 
+    // MARK: Provisioning (admin-only at the route layer)
+
+    /// Creates a new server as a compose stack under the stacks root, streaming
+    /// the install + startup log. Admin-only; the spec is fully resolved upstream.
+    func provision(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error>
+    /// Tears a provisioned server down (`compose down -v` + remove its folder).
+    func deprovision(name: String) async throws
+    /// Whether a stack folder with this name already exists under the stacks root.
+    func stackExists(name: String) async -> Bool
+
     // MARK: Daemon-global maintenance (admin-only at the route layer)
 
     /// `docker image prune -f` — reclaims dangling images across the daemon.
     func imagePrune() async throws -> String
     /// `docker system df` — disk usage summary.
     func diskUsage() async throws -> String
+}
+
+/// A one-line error stream, for when provisioning can't even start (e.g. docker
+/// is unavailable) — mirrors the shape provisioning normally streams.
+func provisionErrorStream(_ message: String) -> AsyncThrowingStream<String, Error> {
+    AsyncThrowingStream { continuation in
+        continuation.yield("✖ \(message)")
+        continuation.finish(throwing: ContainerServiceError.unavailable(message))
+    }
 }
 
 /// Live implementation backed by the shared `ContainerStore` (native source of
@@ -199,6 +218,22 @@ public struct LiveContainerService: ContainerService {
         guard let container = await container(named: containerName), let cli = await MainActor.run(body: { store.cli })
         else { throw ContainerServiceError.notFound }
         try await ContainerLifecycle.remove(cli: cli, container: container)
+    }
+
+    public func provision(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        guard let cli = await MainActor.run(body: { store.cli }) else {
+            return provisionErrorStream("Docker is unavailable.")
+        }
+        return ServerProvisioner(cli: cli, stacksRoot: stacksRoot()).provision(spec)
+    }
+
+    public func deprovision(name: String) async throws {
+        guard let cli = await MainActor.run(body: { store.cli }) else { throw ContainerServiceError.notFound }
+        try await ServerProvisioner(cli: cli, stacksRoot: stacksRoot()).deprovision(name: name)
+    }
+
+    public func stackExists(name: String) async -> Bool {
+        FileManager.default.fileExists(atPath: stacksRoot().appendingPathComponent(name).path)
     }
 
     public func imagePrune() async throws -> String {

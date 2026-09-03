@@ -19,6 +19,25 @@ public struct DockerCLI: Sendable {
         self.binary = binary
     }
 
+    /// The PATH handed to every docker process. Docker's credential helpers
+    /// (`docker-credential-desktop`, `-osxkeychain`, …) live alongside the docker
+    /// binary and are invoked during `pull`/`compose up` when a `credsStore` is
+    /// configured — so the binary's own directory must be on PATH or every image
+    /// pull fails with "docker-credential-…: executable file not found". We keep
+    /// the environment otherwise minimal (no inherited shell PATH).
+    var processPath: String {
+        let binDir = binary.deletingLastPathComponent().path
+        var dirs = [binDir, "/usr/local/bin", "/usr/bin", "/bin"]
+        // De-dup while preserving order.
+        var seen = Set<String>()
+        dirs = dirs.filter { seen.insert($0).inserted }
+        return dirs.joined(separator: ":")
+    }
+
+    private var processEnvironment: [String: String] {
+        ["HOME": FileManager.default.homeDirectoryForCurrentUser.path, "PATH": processPath]
+    }
+
     public struct CommandResult: Sendable {
         public let stdout: String
         public let stderr: String
@@ -43,11 +62,9 @@ public struct DockerCLI: Sendable {
         let process = Process()
         process.executableURL = binary
         process.arguments = args
-        // A minimal, controlled environment; docker needs HOME to find its config.
-        process.environment = [
-            "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
-            "PATH": "/usr/bin:/bin",
-        ]
+        // A minimal, controlled environment; docker needs HOME to find its config
+        // and PATH to find its credential helpers (see `processPath`).
+        process.environment = processEnvironment
 
         let outPipe = Pipe()
         let errPipe = Pipe()
@@ -81,14 +98,12 @@ public struct DockerCLI: Sendable {
     /// which write their progress to stderr, not stdout.
     public func streamLines(_ args: [String], mergeStderr: Bool = false) -> AsyncThrowingStream<String, Error> {
         let binary = self.binary
+        let environment = processEnvironment
         return AsyncThrowingStream { continuation in
             let process = Process()
             process.executableURL = binary
             process.arguments = args
-            process.environment = [
-                "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
-                "PATH": "/usr/bin:/bin",
-            ]
+            process.environment = environment
             let outPipe = Pipe()
             let errPipe = Pipe()
             process.standardOutput = outPipe
