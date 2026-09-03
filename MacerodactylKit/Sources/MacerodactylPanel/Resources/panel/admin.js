@@ -82,6 +82,7 @@ function input(name, opts = {}) { return h('input', { type: opts.type || 'text',
 function select(name, options, value) { return h('select', { name }, ...options.map(o => h('option', { value: o.value, selected: String(o.value) === String(value) }, o.label))); }
 function badge(text, kind) { return h('span', { class: 'badge ' + kind, text }); }
 function statusBadge(s, running) {
+  if (s === 'suspended') return badge('suspended', 'bad');
   if (running) return badge('running', 'good');
   if (s === 'installing') return badge('installing', 'warn');
   if (s === 'install_failed') return badge('install failed', 'bad');
@@ -253,6 +254,9 @@ async function renderServers() {
     h('td', null, statusBadge(s.status, s.running)),
     h('td', null, h('div', { class: 'rowact' },
       h('a', { class: 'btn ghost sm', href: '#servers/edit/' + enc(s.name) }, 'Edit'),
+      s.status === 'suspended'
+        ? h('button', { class: 'btn ghost sm', onclick: async () => { try { await jsend('POST', '/api/admin/servers/' + enc(s.name) + '/unsuspend'); route(); } catch (e) { alert(e); } } }, 'Unsuspend')
+        : h('button', { class: 'btn ghost sm', onclick: async () => { if (!confirm('Suspend ' + s.name + '? It stops and becomes read-only for its owner.')) return; try { await jsend('POST', '/api/admin/servers/' + enc(s.name) + '/suspend'); route(); } catch (e) { alert(e); } } }, 'Suspend'),
       h('button', { class: 'btn ghost sm danger', onclick: async () => { if (!confirm('Delete server ' + s.name + ' and its data?')) return; try { await jsend('DELETE', '/api/admin/servers/' + enc(s.name)); route(); } catch (e) { alert(e); } } }, 'Delete')))));
   show(pageHeader('Servers', 'All servers on the panel', h('a', { class: 'btn', href: '#servers/new' }, 'Create new')),
     tableCard('Server list', ['Name', 'UUID', 'Image', 'Status', ''], rows));

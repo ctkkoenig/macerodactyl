@@ -223,6 +223,38 @@ import Testing
         }
     }
 
+    @Test func suspendMakesServerReadOnlyForOwner() async throws {
+        let h = try await makeHarness()
+        try await h.app.test(.router) { client in
+            let adminToken = try await login(client, "admin", h.adminPassword)
+            let scoped = try #require(try h.store.user(named: "scoped"))
+            let eggId = try await importEgg(client, token: adminToken, nestName: "MC", json: sampleEgg)
+            try await generateAllocations(client, token: adminToken, start: 25565, end: 25566)
+            // Create a server owned by the scoped user (auto-grants them full access).
+            let create = ByteBuffer(string: #"{"name":"mc1","eggId":\#(eggId),"ownerUserId":\#(scoped.id),"memoryMiB":512}"#)
+            try await client.execute(uri: "/api/admin/servers", method: .post, headers: authed(adminToken), body: create) { _ in }
+            // Admin suspends it.
+            try await client.execute(
+                uri: "/api/admin/servers/mc1/suspend", method: .post, headers: authed(adminToken), body: ByteBuffer(string: "{}")
+            ) {
+                #expect($0.status == .ok)
+            }
+            // The owner can no longer power it (read-only while suspended).
+            let scopedToken = try await login(client, "scoped", h.scopedPassword)
+            try await client.execute(
+                uri: "/api/containers/mc1/power", method: .post, headers: authed(scopedToken),
+                body: ByteBuffer(string: #"{"action":"stop"}"#)
+            ) { #expect($0.status == .forbidden) }
+            // Admin unsuspends.
+            try await client.execute(
+                uri: "/api/admin/servers/mc1/unsuspend", method: .post, headers: authed(adminToken), body: ByteBuffer(string: "{}")
+            ) {
+                #expect($0.status == .ok)
+            }
+            #expect(try h.store.serverRecord(name: "mc1")?.status == "active")
+        }
+    }
+
     @Test func failedProvisionFreesAllocationsAndMarksFailed() async throws {
         let h = try await makeHarness()
         h.service.provisionShouldFail = true

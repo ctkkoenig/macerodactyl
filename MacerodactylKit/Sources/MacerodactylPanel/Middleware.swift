@@ -108,6 +108,17 @@ struct ContainerScopeMiddleware: RouterMiddleware {
                 containerName: name, outcome: "denied", sourceIP: context.clientIP)
             throw HTTPError(.forbidden)
         }
+        // Suspension gate: a suspended server is read-only for everyone except an
+        // admin (who needs to manage/unsuspend it). View-only routes still pass.
+        if required != .view, !user.isAdmin {
+            let record = (try? store.serverRecord(name: name)) ?? nil
+            if record?.status == "suspended" {
+                try? store.recordAudit(
+                    username: user.username, action: auditAction(for: required),
+                    containerName: name, outcome: "denied", sourceIP: context.clientIP, detail: "suspended")
+                throw HTTPError(.forbidden)
+            }
+        }
         return try await next(request, context)
     }
 

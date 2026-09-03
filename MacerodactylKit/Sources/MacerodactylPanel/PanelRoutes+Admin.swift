@@ -44,6 +44,8 @@ extension PanelRoutes {
         admin.post("servers", use: apiAdminServerCreate)
         admin.put("servers/:name", use: apiAdminServerEdit)
         admin.post("servers/:name/reinstall", use: apiAdminServerReinstall)
+        admin.post("servers/:name/suspend", use: apiAdminServerSuspend)
+        admin.post("servers/:name/unsuspend", use: apiAdminServerUnsuspend)
         admin.delete("servers/:name", use: apiAdminServerDelete)
 
         admin.get("servers/:name/databases", use: apiAdminDatabasesList)
@@ -290,6 +292,25 @@ extension PanelRoutes {
         _ = try context.requireIdentity()
         let live = Set(await containers.allContainers().map(\.name))
         return encode(try store.listServerRecords().map { ServerDTO(record: $0, running: live.contains($0.name)) })
+    }
+
+    @Sendable func apiAdminServerSuspend(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard try store.serverRecord(name: name) != nil else { throw notFound() }
+        try? await containers.power(.stop, containerName: name)
+        try store.setServerStatus(name: name, status: "suspended")
+        audit(user: user.username, action: "admin.server.suspend", container: name, outcome: "ok", ip: context.clientIP)
+        return json(["ok": true])
+    }
+
+    @Sendable func apiAdminServerUnsuspend(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard try store.serverRecord(name: name) != nil else { throw notFound() }
+        try store.setServerStatus(name: name, status: "active")
+        audit(user: user.username, action: "admin.server.unsuspend", container: name, outcome: "ok", ip: context.clientIP)
+        return json(["ok": true])
     }
 
     @Sendable func apiAdminServerDelete(_ request: Request, context: PanelRequestContext) async throws -> Response {
