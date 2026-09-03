@@ -65,6 +65,18 @@ public protocol ContainerService: Sendable {
     /// Whether a stack folder with this name already exists under the stacks root.
     func stackExists(name: String) async -> Bool
 
+    // MARK: Backups (gated on the `.backups` permission)
+
+    /// Archives the server's data dir to `<stack>/backups/<uuid>.tar.gz`. Returns
+    /// nil if the container has no stack folder.
+    func createBackup(containerName: String) async throws -> BackupService.CreatedBackup?
+    /// Stops the container (if running) and restores a backup over its data.
+    func restoreBackup(containerName: String, fileName: String) async throws
+    /// Deletes a backup file.
+    func deleteBackupFile(containerName: String, fileName: String) async throws
+    /// The on-disk backup file for download, or nil if missing/invalid.
+    func backupFileURL(containerName: String, fileName: String) async -> URL?
+
     // MARK: Daemon-global maintenance (admin-only at the route layer)
 
     /// `docker image prune -f` — reclaims dangling images across the daemon.
@@ -246,6 +258,37 @@ public struct LiveContainerService: ContainerService {
 
     public func stackExists(name: String) async -> Bool {
         FileManager.default.fileExists(atPath: stacksRoot().appendingPathComponent(name).path)
+    }
+
+    private func stackDir(for name: String) async -> URL? {
+        guard let container = await container(named: name), let wd = container.composeWorkingDir, !wd.isEmpty
+        else { return nil }
+        return URL(fileURLWithPath: wd)
+    }
+
+    public func createBackup(containerName: String) async throws -> BackupService.CreatedBackup? {
+        guard let dir = await stackDir(for: containerName), let cli = await MainActor.run(body: { store.cli })
+        else { return nil }
+        return try await BackupService.create(cli: cli, stackDir: dir, dataDirName: "data")
+    }
+
+    public func restoreBackup(containerName: String, fileName: String) async throws {
+        guard let dir = await stackDir(for: containerName), let cli = await MainActor.run(body: { store.cli })
+        else { throw ContainerServiceError.notFound }
+        if let container = await container(named: containerName), container.isRunning {
+            try? await power(.stop, containerName: containerName)
+        }
+        try await BackupService.restore(cli: cli, stackDir: dir, dataDirName: "data", fileName: fileName)
+    }
+
+    public func deleteBackupFile(containerName: String, fileName: String) async throws {
+        guard let dir = await stackDir(for: containerName) else { return }
+        try BackupService.delete(stackDir: dir, fileName: fileName)
+    }
+
+    public func backupFileURL(containerName: String, fileName: String) async -> URL? {
+        guard let dir = await stackDir(for: containerName) else { return nil }
+        return BackupService.fileURL(stackDir: dir, fileName: fileName)
     }
 
     public func imagePrune() async throws -> String {

@@ -93,6 +93,12 @@ struct PanelRoutes {
         scoped.get(":name/schedule", use: apiScheduleGet)
         scoped.post(":name/schedule", use: apiScheduleSet)
         scoped.delete(":name/schedule", use: apiScheduleDelete)
+        // Backups (gated on .backups). Data snapshot / restore / download.
+        scoped.get(":name/backups", use: apiBackupsList)
+        scoped.post(":name/backups", use: apiBackupCreate)
+        scoped.get(":name/backups/download", use: apiBackupDownload)
+        scoped.post(":name/backups/restore", use: apiBackupRestore)
+        scoped.delete(":name/backups", use: apiBackupDelete)
         // Destructive lifecycle — all gated on the `.lifecycle` permission via
         // the scope middleware's path mapping. Mutating, so CSRF-protected.
         scoped.post(":name/pull", use: apiPull)
@@ -448,7 +454,7 @@ struct PanelRoutes {
         let filesAvailable: Bool
         let memoryLimitBytes: Int64?
         let cpuCores: Double?
-        struct Permissions: Encodable { let view, power, files, console, schedules, lifecycle: Bool }
+        struct Permissions: Encodable { let view, power, files, console, schedules, lifecycle, backups: Bool }
     }
 
     @Sendable func apiContainerDetail(_ request: Request, context: PanelRequestContext) async throws -> Response {
@@ -467,7 +473,8 @@ struct PanelRoutes {
                 permissions: .init(
                     view: engine.can(.view, containerNamed: name), power: engine.can(.power, containerNamed: name),
                     files: engine.can(.files, containerNamed: name), console: engine.can(.console, containerNamed: name),
-                    schedules: engine.can(.schedules, containerNamed: name), lifecycle: engine.can(.lifecycle, containerNamed: name)
+                    schedules: engine.can(.schedules, containerNamed: name), lifecycle: engine.can(.lifecycle, containerNamed: name),
+                    backups: engine.can(.backups, containerNamed: name)
                 ),
                 filesAvailable: await containers.fileService(containerName: name) != nil,
                 memoryLimitBytes: limit?.memoryBytes, cpuCores: limit?.cpuCores
@@ -894,6 +901,100 @@ struct PanelRoutes {
         guard ok else {
             return json(["error": "The server isn't running, so the console can't accept input."], status: .conflict)
         }
+        return json(["ok": true])
+    }
+
+    // MARK: Backups
+
+    static let maxBackupsPerServer = 20
+
+    struct BackupDTO: Encodable {
+        let id: Int64
+        let uuid: String
+        let name: String?
+        let bytes: Int64
+        let createdAt: String
+        init(_ b: BackupRecord) {
+            id = b.id
+            uuid = b.uuid
+            name = b.name
+            bytes = b.bytes
+            createdAt = b.createdAt
+        }
+    }
+    struct BackupCreateBody: Decodable { let name: String? }
+
+    @Sendable func apiBackupsList(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        _ = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        return encode((try store.listBackups(containerName: name)).map(BackupDTO.init))
+    }
+
+    @Sendable func apiBackupCreate(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard try store.backupCount(containerName: name) < Self.maxBackupsPerServer else {
+            return json(["error": "Backup limit reached (\(Self.maxBackupsPerServer)). Delete one first."], status: .conflict)
+        }
+        let body = try? await request.decode(as: BackupCreateBody.self, context: context)
+        do {
+            guard let made = try await containers.createBackup(containerName: name) else { throw notFound() }
+            try store.recordBackup(
+                containerName: name, uuid: made.uuid, name: body?.name, fileName: made.fileName,
+                bytes: made.bytes, checksum: nil)
+            audit(user: user.username, action: "container.backups", container: name, outcome: "ok", ip: context.clientIP, detail: "create")
+            return encode(
+                BackupDTO(
+                    try store.backup(uuid: made.uuid)
+                        ?? BackupRecord(
+                            id: 0, containerName: name, uuid: made.uuid, name: body?.name, fileName: made.fileName, bytes: made.bytes,
+                            checksum: nil, createdAt: "")))
+        } catch {
+            audit(
+                user: user.username, action: "container.backups", container: name, outcome: "error", ip: context.clientIP,
+                detail: "\(error)")
+            return json(["error": "Backup failed: \(error)"], status: .internalServerError)
+        }
+    }
+
+    @Sendable func apiBackupDownload(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        _ = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let uuid = request.uri.queryParameters["uuid"].map(String.init),
+            let backup = try store.backup(uuid: uuid), backup.containerName == name,
+            let url = await containers.backupFileURL(containerName: name, fileName: backup.fileName)
+        else { throw notFound() }
+        let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.intValue ?? 0
+        return Self.fileDownloadResponse(url: url, size: size)
+    }
+
+    @Sendable func apiBackupRestore(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let uuid = request.uri.queryParameters["uuid"].map(String.init),
+            let backup = try store.backup(uuid: uuid), backup.containerName == name
+        else { throw notFound() }
+        do {
+            try await containers.restoreBackup(containerName: name, fileName: backup.fileName)
+            audit(user: user.username, action: "container.backups", container: name, outcome: "ok", ip: context.clientIP, detail: "restore")
+            return json(["ok": true])
+        } catch {
+            audit(
+                user: user.username, action: "container.backups", container: name, outcome: "error", ip: context.clientIP,
+                detail: "restore: \(error)")
+            return json(["error": "Restore failed: \(error)"], status: .internalServerError)
+        }
+    }
+
+    @Sendable func apiBackupDelete(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let uuid = request.uri.queryParameters["uuid"].map(String.init),
+            let backup = try store.backup(uuid: uuid), backup.containerName == name
+        else { throw notFound() }
+        try? await containers.deleteBackupFile(containerName: name, fileName: backup.fileName)
+        try store.deleteBackup(uuid: uuid)
+        audit(user: user.username, action: "container.backups", container: name, outcome: "ok", ip: context.clientIP, detail: "delete")
         return json(["ok": true])
     }
 

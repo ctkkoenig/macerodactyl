@@ -86,6 +86,7 @@ import Testing
             case .console: g.console = true
             case .schedules: g.schedules = true
             case .lifecycle: g.lifecycle = true
+            case .backups: g.backups = true
             }
             let engine = AuthorizationEngine(isAdmin: false, grants: ["c": g])
             for other in perms where other != .view && other != p {

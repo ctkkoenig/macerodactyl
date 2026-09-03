@@ -128,6 +128,7 @@ struct ContainerScopeMiddleware: RouterMiddleware {
         case "schedule": return .schedules
         case "console": return .console
         case "power": return .power
+        case "backups": return .backups
         case "pull", "recreate", "remove", "compose": return .lifecycle
         default: return .view  // detail, logs, stats, metrics
         }
@@ -141,6 +142,7 @@ struct ContainerScopeMiddleware: RouterMiddleware {
         case .console: "container.console"
         case .schedules: "container.schedules"
         case .lifecycle: "container.lifecycle"
+        case .backups: "container.backups"
         }
     }
 }

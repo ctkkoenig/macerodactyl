@@ -140,6 +140,35 @@ public struct DaemonContainerService: ContainerService {
         try await ContainerLifecycle.remove(cli: cli, container: container)
     }
 
+    private func stackDir(for name: String) async -> URL? {
+        guard let container = await container(named: name), let wd = container.composeWorkingDir, !wd.isEmpty
+        else { return nil }
+        return URL(fileURLWithPath: wd)
+    }
+
+    public func createBackup(containerName: String) async throws -> BackupService.CreatedBackup? {
+        guard let dir = await stackDir(for: containerName) else { return nil }
+        return try await BackupService.create(cli: cli, stackDir: dir, dataDirName: "data")
+    }
+
+    public func restoreBackup(containerName: String, fileName: String) async throws {
+        guard let dir = await stackDir(for: containerName) else { throw ContainerServiceError.notFound }
+        if let container = await container(named: containerName), container.isRunning {
+            try? await power(.stop, containerName: containerName)
+        }
+        try await BackupService.restore(cli: cli, stackDir: dir, dataDirName: "data", fileName: fileName)
+    }
+
+    public func deleteBackupFile(containerName: String, fileName: String) async throws {
+        guard let dir = await stackDir(for: containerName) else { return }
+        try BackupService.delete(stackDir: dir, fileName: fileName)
+    }
+
+    public func backupFileURL(containerName: String, fileName: String) async -> URL? {
+        guard let dir = await stackDir(for: containerName) else { return nil }
+        return BackupService.fileURL(stackDir: dir, fileName: fileName)
+    }
+
     public func imagePrune() async throws -> String { try await ContainerLifecycle.imagePrune(cli: cli) }
     public func diskUsage() async throws -> String { try await ContainerLifecycle.diskUsage(cli: cli) }
 

@@ -245,6 +245,7 @@ window.enter = async function (name) {
   tabs.push(['overview', 'Overview', 'ⓘ']);
   tabs.push(['logs', 'Logs', '≣']);
   if (p.files && detail.filesAvailable) tabs.push(['files', 'Files', '▤']);
+  if (p.backups) tabs.push(['backups', 'Backups', '⤓']);
   if (p.schedules) tabs.push(['schedules', 'Schedules', '⏱']);
   tabbar.hidden = false;
   tabbar.replaceChildren(...tabs.map(t => h('button', { class: 'navitem', 'data-t': t[0], onclick: () => setTab(t[0]) },
@@ -312,12 +313,14 @@ function render() {
     parts.push(h('div', { class: 'consolelayout' }, main, statCards()));
   } else if (tab === 'logs') { parts.push(...logsTab()); }
   else if (tab === 'files') { parts.push(h('div', { id: 'files' })); }
+  else if (tab === 'backups') { parts.push(h('div', { id: 'backups' }, 'Loading…')); }
   else if (tab === 'schedules') { parts.push(h('div', { id: 'sched' }, 'Loading…')); }
   show(parts);
   if (tab === 'logs') startLogs();
   if (tab === 'console') { bindConsole(); startConsole(); }
   if (tab === 'overview') loadSparkline();
   if (tab === 'files') listDir('');
+  if (tab === 'backups') loadBackups();
   if (tab === 'schedules') loadSchedule();
 }
 
@@ -416,6 +419,51 @@ async function runCmd() {
     const r = await fetch(api('/console/input'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ line: cmd }) });
     if (!r.ok) { const j = await r.json().catch(() => ({})); term.append(h('div', { class: 'cerr', text: j.error || 'The server rejected the command.' })); term.scrollTop = term.scrollHeight; }
   } catch (e) { term.append(h('div', { class: 'cerr', text: 'request failed' })); }
+}
+
+// --- backups ----------------------------------------------------------------
+async function loadBackups() {
+  const host = document.getElementById('backups'); if (!host) return;
+  host.replaceChildren(msg('Loading…'));
+  try {
+    const list = await jget(api('/backups'));
+    const rows = list.map(b => h('div', { class: 'brow' },
+      h('div', {},
+        h('div', { text: b.name || b.uuid.slice(0, 8) }),
+        h('div', { class: 'sub', text: bytes(b.bytes) + ' · ' + (b.createdAt || '').replace('T', ' ').replace(/\..*/, '') })),
+      h('div', { class: 'bact' },
+        h('a', { class: 'lnk', href: api('/backups/download?uuid=' + enc(b.uuid)), text: 'Download' }),
+        h('button', { onclick: () => restoreBackup(b) }, 'Restore'),
+        h('button', { class: 'rm', onclick: () => deleteBackup(b) }, 'Delete'))));
+    host.replaceChildren(
+      h('div', { class: 'toolrow' },
+        h('button', { onclick: createBackup }, 'Create backup'),
+        h('span', { class: 'muted', text: list.length + ' backup(s)' })),
+      list.length ? h('div', {}, ...rows) : msg('No backups yet.'));
+  } catch (e) { host.replaceChildren(msg('Failed to load backups.', true)); }
+}
+async function createBackup() {
+  const name = prompt('Backup name (optional):');
+  if (name === null) return;
+  const host = document.getElementById('backups');
+  if (host) host.prepend(msg('Creating backup… this can take a while for a large server.'));
+  try {
+    const r = await fetch(api('/backups'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ name: name || null }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || 'Backup failed.'); }
+  } catch (e) { alert('Backup failed.'); }
+  loadBackups();
+}
+async function restoreBackup(b) {
+  if (!confirm('Restore "' + (b.name || b.uuid.slice(0, 8)) + '"?\nThis STOPS the server and REPLACES its current data.')) return;
+  try {
+    const r = await fetch(api('/backups/restore?uuid=' + enc(b.uuid)), { method: 'POST', headers: CSRF });
+    alert(r.ok ? 'Restored. Start the server when you are ready.' : 'Restore failed.');
+  } catch (e) { alert('Restore failed.'); }
+}
+async function deleteBackup(b) {
+  if (!confirm('Delete this backup permanently?')) return;
+  try { await fetch(api('/backups?uuid=' + enc(b.uuid)), { method: 'DELETE', headers: CSRF }); } catch (e) {}
+  loadBackups();
 }
 
 // --- logs (stream + search + download) --------------------------------------

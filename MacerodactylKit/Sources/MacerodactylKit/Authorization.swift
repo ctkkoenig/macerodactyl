@@ -11,6 +11,8 @@ public enum ContainerPermission: String, CaseIterable, Sendable, Codable {
     /// recreate the container, remove it. Deliberately separate from `power` so
     /// "can restart" never implies "can destroy".
     case lifecycle
+    /// Create/download/restore/delete backups of this container's data.
+    case backups
 }
 
 /// Per-container grant for one user. Keyed by container *name*: compose
@@ -25,10 +27,12 @@ public struct ContainerGrant: Sendable, Equatable, Codable {
     public var schedules: Bool
     /// Pull/recreate/remove this container (destructive lifecycle).
     public var lifecycle: Bool
+    /// Create/download/restore/delete backups of this container's data.
+    public var backups: Bool
 
     public init(
         view: Bool = false, power: Bool = false, files: Bool = false, console: Bool = false,
-        schedules: Bool = false, lifecycle: Bool = false
+        schedules: Bool = false, lifecycle: Bool = false, backups: Bool = false
     ) {
         self.view = view
         self.power = power
@@ -36,6 +40,7 @@ public struct ContainerGrant: Sendable, Equatable, Codable {
         self.console = console
         self.schedules = schedules
         self.lifecycle = lifecycle
+        self.backups = backups
     }
 
     public func allows(_ permission: ContainerPermission) -> Bool {
@@ -46,10 +51,13 @@ public struct ContainerGrant: Sendable, Equatable, Codable {
         case .console: console
         case .schedules: schedules
         case .lifecycle: lifecycle
+        case .backups: backups
         }
     }
 
-    public var isEmpty: Bool { !view && !power && !files && !console && !schedules && !lifecycle }
+    public var isEmpty: Bool {
+        !view && !power && !files && !console && !schedules && !lifecycle && !backups
+    }
 }
 
 /// Pure scoping logic — THE security boundary of the web panel. No I/O, no

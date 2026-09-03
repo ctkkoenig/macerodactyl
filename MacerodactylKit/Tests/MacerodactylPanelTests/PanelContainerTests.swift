@@ -98,6 +98,35 @@ import Testing
         }
     }
 
+    @Test func backupsRequirePermissionCreateAndList() async throws {
+        // Without backups → 403.
+        let denied = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        try await denied.app.test(.router) { client in
+            let token = try await loginToken(client, denied)
+            try await client.execute(
+                uri: "/api/containers/bot/backups", method: .post, headers: headers(token, csrf: true, json: true),
+                body: ByteBuffer(string: "{}")
+            ) { #expect($0.status == .forbidden) }
+        }
+        // With backups → create records a row and it lists.
+        let granted = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, backups: true))
+        try await granted.app.test(.router) { client in
+            let token = try await loginToken(client, granted)
+            let uuid: String = try await client.execute(
+                uri: "/api/containers/bot/backups", method: .post, headers: headers(token, csrf: true, json: true),
+                body: ByteBuffer(string: #"{"name":"pre-update"}"#)
+            ) { response in
+                #expect(response.status == .ok)
+                return (try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any])["uuid"] as! String
+            }
+            #expect(granted.service.backupCalls.contains { $0.op == "create" })
+            try await client.execute(uri: "/api/containers/bot/backups", method: .get, headers: headers(token)) { response in
+                let arr = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [[String: Any]]
+                #expect(arr.contains { $0["uuid"] as? String == uuid && $0["name"] as? String == "pre-update" })
+            }
+        }
+    }
+
     @Test func schedulesRequireSchedulesPermission() async throws {
         // view but NOT schedules → 403 on both read and write.
         let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))

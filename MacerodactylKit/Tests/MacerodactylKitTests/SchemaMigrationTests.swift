@@ -156,7 +156,19 @@ import Testing
             ContainerStats(
                 name: "x", cpuPercent: 0, memUsedBytes: 0, memLimitBytes: 0, memPercent: 0,
                 netRxBytes: 0, netTxBytes: 0, pids: 0, measuredAt: Date()))
-        #expect(PanelSchema.currentVersion == 8)
+        #expect(PanelSchema.currentVersion == 9)
+    }
+
+    @Test func migratesToV9AddingBackupsPermissionAndTable() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try PanelDataStore(databasePath: dir.appending(path: "v9.sqlite").path)
+        let user = try store.createUser(username: "a", passwordHash: "h", isAdmin: false)
+        // The 7th permission round-trips.
+        try store.setGrant(userID: user.id, containerName: "bot", grant: ContainerGrant(view: true, backups: true))
+        #expect(try store.grants(forUserID: user.id)["bot"]?.backups == true)
+        // The backups table is present + writable.
+        #expect(try store.listBackups(containerName: "bot").isEmpty)
     }
 
     @Test func migratesV7ToV8SeedingTheSelfNodeAndProvisioningTables() throws {
@@ -170,6 +182,11 @@ import Testing
                 """
                 CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL, is_admin INTEGER NOT NULL DEFAULT 0, created_at TEXT);
+                CREATE TABLE grants (user_id INTEGER NOT NULL, container_name TEXT NOT NULL,
+                    perm_view INTEGER NOT NULL DEFAULT 0, perm_power INTEGER NOT NULL DEFAULT 0,
+                    perm_files INTEGER NOT NULL DEFAULT 0, perm_console INTEGER NOT NULL DEFAULT 0,
+                    perm_schedules INTEGER NOT NULL DEFAULT 0, perm_lifecycle INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (user_id, container_name));
                 """)
             db.userVersion = 7
         }

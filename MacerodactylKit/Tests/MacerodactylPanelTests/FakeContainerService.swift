@@ -135,6 +135,21 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
         lock.withLock { lifecycleCalls.append(("remove", containerName)) }
     }
 
+    private(set) var backupCalls: [(op: String, name: String, file: String)] = []
+    func createBackup(containerName: String) async throws -> BackupService.CreatedBackup? {
+        guard fixtures[containerName] != nil else { return nil }
+        let uuid = UUID().uuidString
+        lock.withLock { backupCalls.append(("create", containerName, uuid)) }
+        return BackupService.CreatedBackup(uuid: uuid, fileName: "\(uuid).tar.gz", bytes: 2048)
+    }
+    func restoreBackup(containerName: String, fileName: String) async throws {
+        lock.withLock { backupCalls.append(("restore", containerName, fileName)) }
+    }
+    func deleteBackupFile(containerName: String, fileName: String) async throws {
+        lock.withLock { backupCalls.append(("delete", containerName, fileName)) }
+    }
+    func backupFileURL(containerName: String, fileName: String) async -> URL? { nil }
+
     var pruneResult = "Total reclaimed space: 1.2GB"
     var diskResult = "TYPE  TOTAL  ACTIVE  SIZE  RECLAIMABLE"
     func imagePrune() async throws -> String {

@@ -205,7 +205,7 @@ public enum PanelBackup {
 /// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
 /// scoping, and audit never have to be retrofitted into the data model.
 public enum PanelSchema {
-    public static let currentVersion = 8
+    public static let currentVersion = 9
 
     public static func migrate(_ db: Database) throws {
         if db.userVersion < 1 {
@@ -440,6 +440,26 @@ public enum PanelSchema {
                 """)
             db.userVersion = 8
         }
+        if db.userVersion < 9 {
+            // Seventh grant permission (backups) + the backups table. Existing
+            // grants default to no backup access.
+            try db.execute(
+                """
+                ALTER TABLE grants ADD COLUMN perm_backups INTEGER NOT NULL DEFAULT 0;
+                CREATE TABLE IF NOT EXISTS backups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    container_name TEXT NOT NULL,
+                    uuid TEXT NOT NULL UNIQUE,
+                    name TEXT,
+                    file_name TEXT NOT NULL,
+                    bytes INTEGER NOT NULL DEFAULT 0,
+                    checksum TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_backups_container ON backups(container_name, created_at);
+                """)
+            db.userVersion = 9
+        }
     }
 }
 
@@ -528,18 +548,20 @@ public final class PanelDataStore: Sendable {
             try db.run(
                 """
                 INSERT INTO grants
-                    (user_id, container_name, perm_view, perm_power, perm_files, perm_console, perm_schedules, perm_lifecycle)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (user_id, container_name, perm_view, perm_power, perm_files, perm_console, perm_schedules, perm_lifecycle, perm_backups)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id, container_name) DO UPDATE SET
                     perm_view=excluded.perm_view, perm_power=excluded.perm_power,
                     perm_files=excluded.perm_files, perm_console=excluded.perm_console,
-                    perm_schedules=excluded.perm_schedules, perm_lifecycle=excluded.perm_lifecycle
+                    perm_schedules=excluded.perm_schedules, perm_lifecycle=excluded.perm_lifecycle,
+                    perm_backups=excluded.perm_backups
                 """,
                 [
                     .integer(userID), .text(containerName),
                     .integer(grant.view ? 1 : 0), .integer(grant.power ? 1 : 0),
                     .integer(grant.files ? 1 : 0), .integer(grant.console ? 1 : 0),
                     .integer(grant.schedules ? 1 : 0), .integer(grant.lifecycle ? 1 : 0),
+                    .integer(grant.backups ? 1 : 0),
                 ]
             )
         }
@@ -555,7 +577,8 @@ public final class PanelDataStore: Sendable {
                 files: (row["perm_files"]?.asInt ?? 0) != 0,
                 console: (row["perm_console"]?.asInt ?? 0) != 0,
                 schedules: (row["perm_schedules"]?.asInt ?? 0) != 0,
-                lifecycle: (row["perm_lifecycle"]?.asInt ?? 0) != 0
+                lifecycle: (row["perm_lifecycle"]?.asInt ?? 0) != 0,
+                backups: (row["perm_backups"]?.asInt ?? 0) != 0
             )
         }
         return result
