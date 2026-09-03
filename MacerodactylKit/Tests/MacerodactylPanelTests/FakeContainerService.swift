@@ -175,6 +175,16 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
         }
         return cannedStream(["» Preparing \(spec.name)…", "» Starting the server…", "✔ Server \"\(spec.name)\" created."])
     }
+    private(set) var reconfigured: [ProvisionSpec] = []
+    private(set) var reinstalled: [ProvisionSpec] = []
+    func reconfigure(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        lock.withLock { reconfigured.append(spec) }
+        return cannedStream(["» Applying changes…", "✔ Server \"\(spec.name)\" updated."])
+    }
+    func reinstall(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        lock.withLock { reinstalled.append(spec) }
+        return cannedStream(["» Re-running egg install…", "✔ Server \"\(spec.name)\" reinstalled."])
+    }
     func deprovision(name: String) async throws {
         lock.withLock { deprovisioned.append(name) }
     }

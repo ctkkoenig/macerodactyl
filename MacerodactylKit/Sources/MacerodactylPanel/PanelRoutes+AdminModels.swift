@@ -192,6 +192,7 @@ struct ImportResultDTO: Encodable {
 struct ServerDTO: Encodable {
     let id: Int64
     let name: String
+    let displayName: String?
     let uuid: String
     let dockerImage: String
     let status: String
@@ -203,6 +204,7 @@ struct ServerDTO: Encodable {
     init(record: ServerRecord, running: Bool) {
         id = record.id
         name = record.name
+        displayName = record.displayName
         uuid = record.uuid
         dockerImage = record.dockerImage
         status = record.status
@@ -279,7 +281,153 @@ struct CreateMountBody: Decodable {
     let description: String?
 }
 
-// MARK: - Create Server (SSE provisioning)
+struct EditServerBody: Decodable {
+    let displayName: String?
+    let image: String?
+    let ownerUserId: Int64?
+    let memoryMiB: Int?
+    let swapMiB: Int?
+    let diskMiB: Int?
+    let cpuPercent: Int?
+    let cpuPinning: String?
+    let ioWeight: Int?
+    let pidsLimit: Int?
+    let oomKillDisable: Bool?
+    let values: [String: String]?
+}
+
+struct ServerDetailDTO: Encodable {
+    let name: String
+    let displayName: String?
+    let uuid: String
+    let dockerImage: String
+    let status: String
+    let ownerUserId: Int64?
+    let eggId: Int64?
+    let memoryMiB: Int
+    let swapMiB: Int
+    let diskMiB: Int
+    let cpuPercent: Int
+    let cpuPinning: String?
+    let ioWeight: Int?
+    let pidsLimit: Int?
+    let oomKillDisable: Bool
+    let variables: [EggVariableDTO]
+    let values: [String: String]
+    let images: [EggImageDTO]
+}
+
+// MARK: - Create / Edit / Reinstall Server (SSE provisioning)
+
+extension PanelRoutes {
+    /// Rebuilds a full ProvisionSpec from a server's current record + its egg +
+    /// allocations + mounts + stored variable values, re-resolving startup/env
+    /// against the (possibly edited) limits and primary port. Used by edit and
+    /// reinstall so both apply exactly what create would.
+    func rebuildSpec(for record: ServerRecord) throws -> ProvisionSpec? {
+        guard let eggID = record.eggID, let stored = try store.egg(id: eggID) else { return nil }
+        let egg = try stored.parsed()
+        let allocations = try store.allocations(forServer: record.name)
+        guard let primary = allocations.first(where: \.isPrimary) ?? allocations.first else { return nil }
+        // Only the user-chosen egg variables (not the magic runtime vars) are
+        // re-fed to the resolver, so new limits/port flow through.
+        let eggEnvNames = Set(egg.variables.map(\.envVariable))
+        let userValues = (try store.serverVariables(serverID: record.id)).filter { eggEnvNames.contains($0.key) }
+        let settings = (try? store.globalSettings()) ?? .default
+        let runtime = ServerRuntimeContext(
+            memoryMiB: record.limits.memoryMiB, swapMiB: record.limits.swapMiB, diskMiB: record.limits.diskMiB,
+            port: primary.port, cpuPercent: record.limits.cpuPercent, uuid: record.uuid,
+            timezone: settings.defaultTimezone)
+        let resolved = VariableResolver.resolveStartup(egg: egg, values: userValues, runtime: runtime)
+        let mappings = allocations.map {
+            PortMapping(hostIP: $0.ip, hostPort: $0.port, containerPort: $0.port, proto: $0.proto)
+        }
+        let mounts = (try store.mountsForServer(serverID: record.id)).map {
+            VolumeMount(source: $0.source, target: $0.target, readOnly: $0.readOnly)
+        }
+        let stop = ServerStop.from(configStop: egg.configStop)
+        return ProvisionSpec(
+            name: record.name, image: record.dockerImage, startup: resolved.startup.value,
+            environment: resolved.environment, install: egg.install, limits: record.limits,
+            portMappings: mappings, extraMounts: mounts, configFiles: egg.configFiles,
+            stopSignal: stop.signal, stopGracePeriodSeconds: stop.graceSeconds)
+    }
+
+    @Sendable func apiAdminServerDetail(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        _ = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let record = try store.serverRecord(name: name) else { throw notFound() }
+        let egg = record.eggID.flatMap { try? store.egg(id: $0) }
+        let parsed = try? egg?.parsed()
+        let values = try store.serverVariables(serverID: record.id)
+        return encode(
+            ServerDetailDTO(
+                name: record.name, displayName: record.displayName, uuid: record.uuid,
+                dockerImage: record.dockerImage, status: record.status, ownerUserId: record.ownerUserID,
+                eggId: record.eggID, memoryMiB: record.limits.memoryMiB, swapMiB: record.limits.swapMiB,
+                diskMiB: record.limits.diskMiB, cpuPercent: record.limits.cpuPercent,
+                cpuPinning: record.limits.cpuPinning, ioWeight: record.limits.ioWeight,
+                pidsLimit: record.limits.pidsLimit, oomKillDisable: record.limits.oomKillDisable,
+                variables: (parsed?.variables ?? []).map {
+                    EggVariableDTO(
+                        name: $0.name, description: $0.variableDescription, envVariable: $0.envVariable,
+                        defaultValue: $0.defaultValue, userViewable: $0.userViewable, userEditable: $0.userEditable,
+                        rules: $0.rules)
+                },
+                values: values,
+                images: (parsed?.dockerImages ?? []).map { EggImageDTO(label: $0.label, image: $0.image) }))
+    }
+
+    @Sendable func apiAdminServerEdit(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard var record = try store.serverRecord(name: name) else { throw notFound() }
+        guard let body = try? await request.decode(as: EditServerBody.self, context: context) else {
+            return json(["error": "bad request"], status: .badRequest)
+        }
+        // Apply edits onto the record (unset fields keep their current value).
+        record.displayName = body.displayName ?? record.displayName
+        record.dockerImage = body.image?.isEmpty == false ? body.image! : record.dockerImage
+        record.ownerUserID = body.ownerUserId ?? record.ownerUserID
+        record.limits = ServerLimits(
+            memoryMiB: body.memoryMiB ?? record.limits.memoryMiB, swapMiB: body.swapMiB ?? record.limits.swapMiB,
+            diskMiB: body.diskMiB ?? record.limits.diskMiB, cpuPercent: body.cpuPercent ?? record.limits.cpuPercent,
+            cpuPinning: body.cpuPinning ?? record.limits.cpuPinning, ioWeight: body.ioWeight ?? record.limits.ioWeight,
+            pidsLimit: body.pidsLimit ?? record.limits.pidsLimit,
+            oomKillDisable: body.oomKillDisable ?? record.limits.oomKillDisable)
+
+        // Merge variable overrides into the stored values.
+        var values = try store.serverVariables(serverID: record.id)
+        for (key, value) in body.values ?? [:] { values[key] = value }
+        try store.updateServer(
+            name: name, displayName: record.displayName, dockerImage: record.dockerImage,
+            ownerUserID: record.ownerUserID, limits: record.limits, startup: record.startup, values: values)
+
+        // Re-grant the (possibly new) owner.
+        if let ownerID = record.ownerUserID, let owner = try? store.user(id: ownerID) {
+            try? AccountManager(store: store).setGrant(
+                userID: owner.id, containerName: name,
+                grant: ContainerGrant(
+                    view: true, power: true, files: true, console: true, schedules: true, lifecycle: true,
+                    backups: true), filesGrantable: true)
+        }
+        guard let spec = try rebuildSpec(for: record) else {
+            return json(["error": "could not rebuild the server configuration"], status: .internalServerError)
+        }
+        audit(user: user.username, action: "admin.server.edit", container: name, outcome: "ok", ip: context.clientIP)
+        return Self.sseResponse(payloads: await containers.reconfigure(spec))
+    }
+
+    @Sendable func apiAdminServerReinstall(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let record = try store.serverRecord(name: name), let spec = try rebuildSpec(for: record) else {
+            throw notFound()
+        }
+        audit(user: user.username, action: "admin.server.reinstall", container: name, outcome: "ok", ip: context.clientIP)
+        return Self.sseResponse(payloads: await containers.reinstall(spec))
+    }
+}
 
 extension PanelRoutes {
     @Sendable func apiAdminServerCreate(_ request: Request, context: PanelRequestContext) async throws -> Response {

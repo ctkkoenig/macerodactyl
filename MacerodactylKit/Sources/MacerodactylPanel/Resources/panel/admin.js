@@ -47,8 +47,8 @@ async function jsend(method, p, body) {
   if (!r.ok) throw await errText(r);
   const t = await r.text(); return t ? JSON.parse(t) : {};
 }
-async function postStream(url, body, onLine) {
-  const r = await fetch(url, { method: 'POST', headers: { ...CSRF, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+async function postStream(url, body, onLine, method) {
+  const r = await fetch(url, { method: method || 'POST', headers: { ...CSRF, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const ct = r.headers.get('content-type') || '';
   if (ct.includes('application/json')) { throw await errText(r); }   // a pre-stream validation error
   const reader = r.body.getReader(), dec = new TextDecoder(); let buf = '';
@@ -134,12 +134,13 @@ function buildNav(active) {
 
 async function route() {
   const raw = (location.hash.replace(/^#/, '') || 'overview');
-  const [id, sub] = raw.split('/');
+  const [id, sub, arg] = raw.split('/');
   const item = byId[id] || byId.overview;
   buildNav(item.id);
   crumbEl.textContent = 'Admin › ' + item.label;
   try {
     if (id === 'servers' && sub === 'new') { await renderCreateServer(); }
+    else if (id === 'servers' && sub === 'edit' && arg) { await renderEditServer(decodeURIComponent(arg)); }
     else { await item.render(); }
   } catch (e) { show(pageHeader(item.label), msg(String(e), 'err')); }
 }
@@ -247,9 +248,12 @@ async function renderLocations() {
 async function renderServers() {
   const servers = await jget('/api/admin/servers');
   const rows = servers.map(s => h('tr', null,
-    h('td', { text: s.name }), h('td', { class: 'mono', text: s.uuid.slice(0, 18) }), h('td', { class: 'mono', text: s.dockerImage }),
+    h('td', null, h('div', { text: s.displayName || s.name }), s.displayName ? h('div', { class: 'mono', text: s.name }) : null),
+    h('td', { class: 'mono', text: s.uuid.slice(0, 18) }), h('td', { class: 'mono', text: s.dockerImage }),
     h('td', null, statusBadge(s.status, s.running)),
-    h('td', null, h('div', { class: 'rowact' }, h('button', { class: 'btn ghost sm danger', onclick: async () => { if (!confirm('Delete server ' + s.name + ' and its data?')) return; try { await jsend('DELETE', '/api/admin/servers/' + enc(s.name)); route(); } catch (e) { alert(e); } } }, 'Delete')))));
+    h('td', null, h('div', { class: 'rowact' },
+      h('a', { class: 'btn ghost sm', href: '#servers/edit/' + enc(s.name) }, 'Edit'),
+      h('button', { class: 'btn ghost sm danger', onclick: async () => { if (!confirm('Delete server ' + s.name + ' and its data?')) return; try { await jsend('DELETE', '/api/admin/servers/' + enc(s.name)); route(); } catch (e) { alert(e); } } }, 'Delete')))));
   show(pageHeader('Servers', 'All servers on the panel', h('a', { class: 'btn', href: '#servers/new' }, 'Create new')),
     tableCard('Server list', ['Name', 'UUID', 'Image', 'Status', ''], rows));
 }
@@ -348,6 +352,66 @@ async function renderCreateServer() {
     } catch (err) { done.replaceChildren(msg(String(err), 'err'), h('a', { class: 'btn ghost', href: '#servers/new', onclick: () => setTimeout(route, 0) }, 'Try again')); }
   }
   show(pageHeader('Create server', 'Provision a new server from an egg'), card(null, form));
+}
+
+// Edit an existing server (limits / image / owner / variables + reinstall).
+async function renderEditServer(name) {
+  crumbEl.textContent = 'Admin › Servers › Edit';
+  const [d, users] = await Promise.all([jget('/api/admin/servers/' + enc(name)), jget('/api/admin/users')]);
+  const note = h('div');
+  const shownVars = (d.variables || []).filter(v => v.userViewable);
+  const form = h('form', { onsubmit: e => { e.preventDefault(); saveEdit(); } },
+    h('fieldset', null, h('legend', { text: 'Core' }),
+      h('div', { class: 'form-row' },
+        field('Display name', input('displayName', { value: d.displayName || '' }), 'Identifier stays "' + d.name + '".'),
+        field('Owner', select('owner', [{ value: '', label: '— none —' }, ...users.map(u => ({ value: u.id, label: u.username }))], d.ownerUserId || ''), 'Gets full access.'),
+        d.images && d.images.length ? field('Docker image', select('image', d.images.map(i => ({ value: i.image, label: i.label })), d.dockerImage)) : field('Docker image', input('image', { value: d.dockerImage })))),
+    h('fieldset', null, h('legend', { text: 'Resource limits (0 = unlimited)' }),
+      h('div', { class: 'form-row' },
+        field('Memory (MiB)', input('mem', { type: 'number', value: d.memoryMiB })),
+        field('Swap (MiB)', input('swap', { type: 'number', value: d.swapMiB })),
+        field('CPU (%)', input('cpu', { type: 'number', value: d.cpuPercent }))),
+      h('div', { class: 'form-row' },
+        field('Disk (MiB)', input('disk', { type: 'number', value: d.diskMiB }), 'Not hard-enforced on macOS Docker.'),
+        field('CPU pinning', input('cpuset', { value: d.cpuPinning || '' })),
+        field('Block IO weight', input('io', { type: 'number', value: d.ioWeight ?? '' }))),
+      h('div', { class: 'form-row' },
+        field('PID limit', input('pids', { type: 'number', value: d.pidsLimit ?? '' })),
+        h('div', { class: 'field' }, h('label', { text: 'OOM killer' }), h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'oom', checked: d.oomKillDisable }), 'Kill on memory breach')))),
+    shownVars.length ? h('fieldset', null, h('legend', { text: 'Service variables' }),
+      ...shownVars.map(v => field(v.name + (v.userEditable ? '' : ' (locked)'), h('input', { type: 'text', name: 'var:' + v.envVariable, value: d.values[v.envVariable] ?? v.defaultValue, disabled: !v.userEditable }), (v.description || '') + (v.rules.length ? '  ·  ' + v.rules.join(', ') : '')))) : null,
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn', type: 'submit' }, 'Save & apply'),
+      h('button', { class: 'btn ghost', type: 'button', onclick: reinstall }, 'Reinstall'),
+      h('a', { class: 'btn ghost', href: '#servers' }, 'Back')),
+    note);
+
+  function collect() {
+    const values = {};
+    form.querySelectorAll('[name^="var:"]').forEach(el => { if (!el.disabled) values[el.name.slice(4)] = el.value; });
+    return {
+      displayName: val(form, 'displayName') || null,
+      ownerUserId: form.querySelector('[name=owner]').value ? parseInt(form.querySelector('[name=owner]').value, 10) : null,
+      image: form.querySelector('[name=image]').value || null,
+      memoryMiB: num(form, 'mem'), swapMiB: num(form, 'swap'), diskMiB: num(form, 'disk'), cpuPercent: num(form, 'cpu'),
+      cpuPinning: val(form, 'cpuset') || null, ioWeight: val(form, 'io') ? num(form, 'io') : null,
+      pidsLimit: val(form, 'pids') ? num(form, 'pids') : null, oomKillDisable: chk(form, 'oom'), values,
+    };
+  }
+  function streamInto(promise, title) {
+    const term = h('div', { class: 'term' });
+    show(pageHeader(title + ' ' + name), card('Log', term), h('a', { class: 'btn', href: '#servers', onclick: () => setTimeout(route, 0) }, 'Back to servers'));
+    const append = line => { const cls = line.startsWith('✔') ? 'ok' : line.startsWith('✖') ? 'bad' : line.startsWith('»') ? 'step' : ''; term.append(h('div', { class: cls, text: line })); term.scrollTop = term.scrollHeight; };
+    promise(append).catch(err => append('✖ ' + err));
+  }
+  async function saveEdit() {
+    streamInto(cb => postStream('/api/admin/servers/' + enc(name), collect(), cb, 'PUT'), 'Updating');
+  }
+  async function reinstall() {
+    if (!confirm('Reinstall re-runs the egg install over the existing data and restarts the server. Continue?')) return;
+    streamInto(cb => postStream('/api/admin/servers/' + enc(name) + '/reinstall', {}, cb), 'Reinstalling');
+  }
+  show(pageHeader('Edit server', d.name), card(null, form));
 }
 
 // Databases (per server)

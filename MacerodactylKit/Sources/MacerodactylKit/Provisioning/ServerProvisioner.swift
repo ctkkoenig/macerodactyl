@@ -77,6 +77,89 @@ public struct ServerProvisioner: Sendable {
         }
     }
 
+    /// Re-writes an existing server's compose from an edited spec and applies it
+    /// (`compose up -d` recreates the service with the new limits/image/env). Does
+    /// NOT re-run the install or re-apply config.files — the user's data and file
+    /// edits are preserved. The stack must already exist.
+    public func reconfigure(_ spec: ProvisionSpec) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let stackDir = try confinedStackDir(name: spec.name)
+                    guard FileManager.default.fileExists(atPath: stackDir.path) else {
+                        throw ProvisionError.alreadyExists(spec.name)  // reused as "not found" here
+                    }
+                    continuation.yield("» Writing docker-compose.yml…")
+                    try Data(ComposeFileWriter.compose(spec).utf8).write(
+                        to: stackDir.appendingPathComponent("docker-compose.yml"))
+                    continuation.yield("» Applying changes…")
+                    for try await line in cli.streamLines(
+                        ["compose", "--project-directory", stackDir.path, "up", "-d"], mergeStderr: true)
+                    {
+                        continuation.yield(line)
+                    }
+                    continuation.yield("✔ Server \"\(spec.name)\" updated.")
+                    continuation.finish()
+                } catch {
+                    continuation.yield("✖ Update failed: \(Self.describe(error))")
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Re-runs the egg's install script over the existing data (updating server
+    /// files), re-applies config.files, and brings the server back up. Keeps the
+    /// data dir. The caller should stop the container first.
+    public func reinstall(_ spec: ProvisionSpec) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                let emit: (String) -> Void = { continuation.yield($0) }
+                do {
+                    let stackDir = try confinedStackDir(name: spec.name)
+                    let dataDir = stackDir.appendingPathComponent(spec.dataDirName, isDirectory: true)
+                    guard FileManager.default.fileExists(atPath: dataDir.path) else {
+                        throw ProvisionError.alreadyExists(spec.name)
+                    }
+                    if spec.install.isRunnable {
+                        let installDir = stackDir.appendingPathComponent(".install", isDirectory: true)
+                        try FileManager.default.createDirectory(at: installDir, withIntermediateDirectories: true)
+                        try Data(spec.install.script.utf8).write(to: installDir.appendingPathComponent("install.sh"))
+                        emit("» Re-running egg install in \(spec.install.container)…")
+                        var args = [
+                            "run", "--rm", "--entrypoint", spec.install.entrypoint, "-w", "/mnt/server",
+                            "-v", "\(dataDir.path):/mnt/server", "-v", "\(installDir.path):/mnt/install:ro",
+                        ]
+                        for key in spec.environment.keys.sorted() {
+                            args.append("-e")
+                            args.append("\(key)=\(spec.environment[key] ?? "")")
+                        }
+                        args.append(spec.install.container)
+                        args.append("/mnt/install/install.sh")
+                        for try await line in cli.streamLines(args, mergeStderr: true) { emit(line) }
+                        try? FileManager.default.removeItem(at: installDir)
+                    }
+                    applyConfigFiles(spec: spec, dataDir: dataDir, emit: emit)
+                    emit("» Starting the server…")
+                    try Data(ComposeFileWriter.compose(spec).utf8).write(
+                        to: stackDir.appendingPathComponent("docker-compose.yml"))
+                    for try await line in cli.streamLines(
+                        ["compose", "--project-directory", stackDir.path, "up", "-d"], mergeStderr: true)
+                    {
+                        emit(line)
+                    }
+                    emit("✔ Server \"\(spec.name)\" reinstalled.")
+                    continuation.finish()
+                } catch {
+                    emit("✖ Reinstall failed: \(Self.describe(error))")
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
     // MARK: - Steps
 
     /// The confined stack directory for a validated name. The strict name regex

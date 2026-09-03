@@ -83,7 +83,10 @@ public struct StoredEgg: Sendable, Equatable, Identifiable {
 public struct ServerRecord: Sendable, Equatable, Identifiable {
     public let id: Int64
     public var uuid: String
+    /// The immutable slug identity (== container name == stack folder == grant key).
     public var name: String
+    /// A human-editable label; falls back to `name` when unset.
+    public var displayName: String?
     public var eggID: Int64?
     public var dockerImage: String
     public var ownerUserID: Int64?
@@ -433,9 +436,49 @@ extension PanelDataStore {
         try db.run("DELETE FROM server_records WHERE name = ?", [.text(name)])
     }
 
+    /// The stored service-variable values for a server (env_variable → value).
+    public func serverVariables(serverID: Int64) throws -> [String: String] {
+        var out: [String: String] = [:]
+        for row in try db.query("SELECT env_variable, value FROM server_variables WHERE server_id = ?", [.integer(serverID)]) {
+            if let key = row["env_variable"]?.asString { out[key] = row["value"]?.asString ?? "" }
+        }
+        return out
+    }
+
+    /// Applies an edit to a server's mutable fields (the slug `name` never changes).
+    public func updateServer(
+        name: String, displayName: String?, dockerImage: String, ownerUserID: Int64?, limits: ServerLimits,
+        startup: String, values: [String: String]
+    ) throws {
+        try db.run(
+            """
+            UPDATE server_records SET display_name = ?, docker_image = ?, owner_user_id = ?, memory_mib = ?,
+                swap_mib = ?, disk_mib = ?, cpu_percent = ?, cpu_pinning = ?, io_weight = ?, pids_limit = ?,
+                oom_disabled = ?, startup = ? WHERE name = ?
+            """,
+            [
+                displayName.map { SQLValue.text($0) } ?? .null, .text(dockerImage),
+                ownerUserID.map { SQLValue.integer($0) } ?? .null, .integer(Int64(limits.memoryMiB)),
+                .integer(Int64(limits.swapMiB)), .integer(Int64(limits.diskMiB)), .integer(Int64(limits.cpuPercent)),
+                limits.cpuPinning.map { SQLValue.text($0) } ?? .null,
+                limits.ioWeight.map { SQLValue.integer(Int64($0)) } ?? .null,
+                limits.pidsLimit.map { SQLValue.integer(Int64($0)) } ?? .null,
+                .integer(limits.oomKillDisable ? 1 : 0), .text(startup), .text(name),
+            ])
+        if let server = try serverRecord(name: name) {
+            try db.run("DELETE FROM server_variables WHERE server_id = ?", [.integer(server.id)])
+            for (env, value) in values {
+                try db.run(
+                    "INSERT INTO server_variables (server_id, env_variable, value) VALUES (?, ?, ?)",
+                    [.integer(server.id), .text(env), .text(value)])
+            }
+        }
+    }
+
     private static func serverFromRow(_ row: [String: SQLValue]) -> ServerRecord {
         ServerRecord(
             id: row["id"]!.asInt!, uuid: row["uuid"]?.asString ?? "", name: row["name"]?.asString ?? "",
+            displayName: row["display_name"]?.asString,
             eggID: row["egg_id"]?.asInt, dockerImage: row["docker_image"]?.asString ?? "",
             ownerUserID: row["owner_user_id"]?.asInt,
             limits: ServerLimits(

@@ -205,7 +205,7 @@ public enum PanelBackup {
 /// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
 /// scoping, and audit never have to be retrofitted into the data model.
 public enum PanelSchema {
-    public static let currentVersion = 9
+    public static let currentVersion = 10
 
     public static func migrate(_ db: Database) throws {
         if db.userVersion < 1 {
@@ -459,6 +459,12 @@ public enum PanelSchema {
                 CREATE INDEX IF NOT EXISTS idx_backups_container ON backups(container_name, created_at);
                 """)
             db.userVersion = 9
+        }
+        if db.userVersion < 10 {
+            // A human display name for a server (the identifier `name` stays the
+            // immutable slug). Servers become editable after creation.
+            try db.execute("ALTER TABLE server_records ADD COLUMN display_name TEXT")
+            db.userVersion = 10
         }
     }
 }

@@ -60,6 +60,10 @@ public protocol ContainerService: Sendable {
     /// Creates a new server as a compose stack under the stacks root, streaming
     /// the install + startup log. Admin-only; the spec is fully resolved upstream.
     func provision(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error>
+    /// Re-applies an edited spec (regenerate compose + `up -d`), preserving data.
+    func reconfigure(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error>
+    /// Re-runs the egg install over existing data, then brings the server up.
+    func reinstall(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error>
     /// Tears a provisioned server down (`compose down -v` + remove its folder).
     func deprovision(name: String) async throws
     /// Whether a stack folder with this name already exists under the stacks root.
@@ -249,6 +253,23 @@ public struct LiveContainerService: ContainerService {
             return provisionErrorStream("Docker is unavailable.")
         }
         return ServerProvisioner(cli: cli, stacksRoot: stacksRoot()).provision(spec)
+    }
+
+    public func reconfigure(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        guard let cli = await MainActor.run(body: { store.cli }) else {
+            return provisionErrorStream("Docker is unavailable.")
+        }
+        return ServerProvisioner(cli: cli, stacksRoot: stacksRoot()).reconfigure(spec)
+    }
+
+    public func reinstall(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        guard let cli = await MainActor.run(body: { store.cli }) else {
+            return provisionErrorStream("Docker is unavailable.")
+        }
+        if let container = await container(named: spec.name), container.isRunning {
+            try? await power(.stop, containerName: spec.name)
+        }
+        return ServerProvisioner(cli: cli, stacksRoot: stacksRoot()).reinstall(spec)
     }
 
     public func deprovision(name: String) async throws {

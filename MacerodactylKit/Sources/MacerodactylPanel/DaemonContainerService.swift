@@ -176,6 +176,17 @@ public struct DaemonContainerService: ContainerService {
         ServerProvisioner(cli: cli, stacksRoot: stacksRoot).provision(spec)
     }
 
+    public func reconfigure(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        ServerProvisioner(cli: cli, stacksRoot: stacksRoot).reconfigure(spec)
+    }
+
+    public func reinstall(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        if let container = await container(named: spec.name), container.isRunning {
+            try? await power(.stop, containerName: spec.name)
+        }
+        return ServerProvisioner(cli: cli, stacksRoot: stacksRoot).reinstall(spec)
+    }
+
     public func deprovision(name: String) async throws {
         try await ServerProvisioner(cli: cli, stacksRoot: stacksRoot).deprovision(name: name)
     }

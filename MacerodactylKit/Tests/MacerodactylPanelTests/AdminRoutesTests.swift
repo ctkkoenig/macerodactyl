@@ -203,6 +203,26 @@ import Testing
         }
     }
 
+    @Test func editServerUpdatesRecordAndReconfigures() async throws {
+        let h = try await makeHarness()
+        try await h.app.test(.router) { client in
+            let token = try await login(client, "admin", h.adminPassword)
+            let eggId = try await importEgg(client, token: token, nestName: "MC", json: sampleEgg)
+            try await generateAllocations(client, token: token, start: 25565, end: 25566)
+            let create = ByteBuffer(string: #"{"name":"mc1","eggId":\#(eggId),"memoryMiB":1024}"#)
+            try await client.execute(uri: "/api/admin/servers", method: .post, headers: authed(token), body: create) { _ in }
+            // Edit: bump memory, set a display name.
+            let edit = ByteBuffer(string: #"{"memoryMiB":2048,"displayName":"My SMP"}"#)
+            try await client.execute(uri: "/api/admin/servers/mc1", method: .put, headers: authed(token), body: edit) {
+                #expect($0.status == .ok)
+            }
+            #expect(try h.store.serverRecord(name: "mc1")?.limits.memoryMiB == 2048)
+            #expect(try h.store.serverRecord(name: "mc1")?.displayName == "My SMP")
+            // The reconfigure spec carries the new memory limit.
+            #expect(h.service.reconfigured.last?.limits.memoryMiB == 2048)
+        }
+    }
+
     @Test func failedProvisionFreesAllocationsAndMarksFailed() async throws {
         let h = try await makeHarness()
         h.service.provisionShouldFail = true

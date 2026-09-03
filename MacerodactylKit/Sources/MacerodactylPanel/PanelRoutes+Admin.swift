@@ -40,7 +40,10 @@ extension PanelRoutes {
         admin.delete("eggs/:id", use: apiAdminEggDelete)
 
         admin.get("servers", use: apiAdminServersList)
+        admin.get("servers/:name", use: apiAdminServerDetail)
         admin.post("servers", use: apiAdminServerCreate)
+        admin.put("servers/:name", use: apiAdminServerEdit)
+        admin.post("servers/:name/reinstall", use: apiAdminServerReinstall)
         admin.delete("servers/:name", use: apiAdminServerDelete)
 
         admin.get("servers/:name/databases", use: apiAdminDatabasesList)
