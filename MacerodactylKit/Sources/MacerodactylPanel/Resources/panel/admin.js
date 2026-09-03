@@ -366,7 +366,9 @@ async function renderDatabases() {
     listBox.replaceChildren(tableCard('Databases · ' + name, ['Name', 'Host', 'User', ''], rows), card('Add database', form));
   };
   sel.addEventListener('change', () => load(sel.value));
-  show(pageHeader('Databases', 'Databases recorded for each server'), card('Server', field('Server', sel)), listBox);
+  show(pageHeader('Databases', 'Connection bookkeeping for each server'),
+    msg('These are records only — Macerodactyl does not create the database or credentials yet. Use them to note an existing database’s connection details for a server. Real provisioning is planned.', ''),
+    card('Server', field('Server', sel)), listBox);
 }
 
 // Mounts
