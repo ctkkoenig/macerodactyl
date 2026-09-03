@@ -116,11 +116,19 @@ import Testing
         #expect(await fireCount.total == 1)
     }
 
+    /// Backdates a schedule's created_at so the missed-fire window is controlled
+    /// (upsertSchedule stamps it with the real wall clock, which the far-future
+    /// test clock would otherwise turn into hundreds of "missed" daily fires).
+    private func backdateCreatedAt(_ store: PanelDataStore, _ name: String, _ iso: String) throws {
+        try store.db.run("UPDATE schedules SET created_at = ? WHERE container_name = ?", [.text(iso), .text(name)])
+    }
+
     @Test func surfacesAFireMissedWhileTheDaemonWasDown() async throws {
-        // The schedule is created "now" (real time), but the scheduler's clock is
-        // far in the future — so its 03:00 slot passed while nothing was running.
+        // The schedule existed since the start of the clock's day; its single
+        // 03:00 slot passed while nothing was running.
         let store = try store()
         try store.upsertSchedule(containerName: "bot", hour: 3, minute: 0, weekdays: [])
+        try backdateCreatedAt(store, "bot", "2099-06-15T00:00:00.000Z")
         let fireCount = Counter()
         let scheduler = InProcessScheduler(
             store: store, calendar: utcCalendar,
@@ -148,6 +156,7 @@ import Testing
     @Test func doesNotFlagTheCurrentMinuteAsMissedAndAuditsRealFires() async throws {
         let store = try store()
         try store.upsertSchedule(containerName: "bot", hour: 3, minute: 0, weekdays: [])
+        try backdateCreatedAt(store, "bot", "2099-06-15T00:00:00.000Z")
         let scheduler = InProcessScheduler(
             store: store, calendar: utcCalendar, restart: { _ in .success("ok") })
         // Ticking exactly at 03:00 fires normally and is NOT reported as missed.
@@ -155,6 +164,56 @@ import Testing
         let audit = try store.listAudit(containerName: "bot")
         #expect(audit.contains { $0.action == "container.schedules" && $0.outcome == "ok" })
         #expect(!audit.contains { $0.outcome == "missed" })
+    }
+
+    @Test func aMultiFireOutageReportsTheCountAndWindow() async throws {
+        // Daily 03:00 schedule; the daemon was down 2099-06-10 → 2099-06-15, so it
+        // skipped six fires. That must NOT read like a single skipped fire.
+        let store = try store()
+        try store.upsertSchedule(containerName: "bot", hour: 3, minute: 0, weekdays: [])
+        try backdateCreatedAt(store, "bot", "2099-06-10T00:00:00.000Z")
+        let fireCount = Counter()
+        let scheduler = InProcessScheduler(
+            store: store, calendar: utcCalendar,
+            restart: { name in
+                await fireCount.bump(name)
+                return .success(name)
+            })
+
+        _ = await scheduler.tick(at: date("2099-06-15T09:00:00Z"))
+        #expect(await fireCount.total == 0)  // still never auto-fires a missed restart
+
+        // Exactly one audit row for the reconciliation, carrying the count + window.
+        let missed = try store.listAudit(containerName: "bot").filter { $0.outcome == "missed" }
+        #expect(missed.count == 1)
+        let detail = try #require(missed.first?.detail)
+        #expect(detail.contains("6"))  // the count of skipped fires
+        #expect(detail.contains("2099-06-10 03:00"))  // first missed fire (window start)
+        #expect(detail.contains("2099-06-15 03:00"))  // last missed fire (window end)
+
+        // The schedule row's last run is the most recent missed slot, so a second
+        // reconciliation at the same time reports nothing new.
+        #expect(try store.schedule(containerName: "bot")?.lastOutcome == "missed")
+        _ = await scheduler.tick(at: date("2099-06-15T09:00:00Z"))
+        #expect(try store.listAudit(containerName: "bot").filter { $0.outcome == "missed" }.count == 1)
+    }
+
+    @Test func expectedFiresEnumeratesTheWindowExcludingBounds() {
+        let cal = utcCalendar
+        let fires = ScheduleEvaluator.expectedFires(
+            after: date("2099-06-10T00:00:00Z"), through: date("2099-06-13T09:00:00Z"),
+            scheduleHour: 3, scheduleMinute: 0, weekdays: [], calendar: cal)
+        #expect(
+            fires == [
+                date("2099-06-10T03:00:00Z"), date("2099-06-11T03:00:00Z"),
+                date("2099-06-12T03:00:00Z"), date("2099-06-13T03:00:00Z"),
+            ])
+        // Weekday-restricted: only the matching days in the window.
+        // 2099-06-15 is a Monday (calendar weekday 2 → launchd 1).
+        let mondays = ScheduleEvaluator.expectedFires(
+            after: date("2099-06-08T00:00:00Z"), through: date("2099-06-16T00:00:00Z"),
+            scheduleHour: 3, scheduleMinute: 0, weekdays: [1], calendar: cal)
+        #expect(mondays == [date("2099-06-08T03:00:00Z"), date("2099-06-15T03:00:00Z")])
     }
 
     @Test func lastExpectedFireFindsTheMostRecentPastSlot() {

@@ -36,6 +36,34 @@ public enum ScheduleEvaluator {
         }
         return nil
     }
+
+    /// Every moment in the half-open window `(after, through]` when the schedule
+    /// was due, oldest first — used to count the fires an outage skipped and to
+    /// bound its window. Enumeration is capped to the last 400 days before
+    /// `through` so a corrupt/ancient lower bound can't loop unboundedly.
+    public static func expectedFires(
+        after: Date, through: Date, scheduleHour: Int, scheduleMinute: Int, weekdays: Set<Int>, calendar: Calendar
+    ) -> [Date] {
+        guard after < through else { return [] }
+        let floor = calendar.date(byAdding: .day, value: -400, to: through) ?? after
+        let lowerBound = max(after, floor)
+        var results: [Date] = []
+        var day = calendar.startOfDay(for: lowerBound)
+        let lastDay = calendar.startOfDay(for: through)
+        while day <= lastDay {
+            var comps = calendar.dateComponents([.year, .month, .day], from: day)
+            comps.hour = scheduleHour
+            comps.minute = scheduleMinute
+            comps.second = 0
+            if let candidate = calendar.date(from: comps), candidate > after, candidate <= through {
+                let weekday = calendar.component(.weekday, from: candidate)
+                if weekdays.isEmpty || weekdays.contains(weekday - 1) { results.append(candidate) }
+            }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        return results
+    }
 }
 
 /// Outcome of firing one scheduled restart, mirroring `ScheduleOutcome` but
@@ -147,28 +175,46 @@ public actor InProcessScheduler {
     private func reconcileMissedRuns(now: Date) {
         let schedules = (try? store.listSchedules()) ?? []
         for schedule in schedules {
-            guard
-                let expected = ScheduleEvaluator.lastExpectedFire(
-                    before: now, scheduleHour: schedule.hour, scheduleMinute: schedule.minute,
-                    weekdays: schedule.weekdays, calendar: calendar)
-            else { continue }
-            // Don't flag the minute this tick is about to fire normally.
-            if minuteKey(expected) == minuteKey(now) { continue }
-            // Only a schedule that already existed at the fire time can have missed
-            // it; an unknown creation time (shouldn't happen post-migration) is not
+            // Only a schedule that already existed can have missed a fire; an
+            // unknown creation time (shouldn't happen post-migration) is not
             // flagged rather than risk a false alarm.
-            guard let createdAt = parseISO(schedule.createdAt), expected > createdAt else { continue }
-            // Already ran (or already recorded a miss) at/after this slot?
-            let lastRun = parseISO(schedule.lastRunAt) ?? .distantPast
-            guard lastRun < expected else { continue }
+            guard let createdAt = parseISO(schedule.createdAt) else { continue }
+            // Lower bound (exclusive): fires at/before the later of creation and
+            // the last recorded run have already run or predate the schedule.
+            let since = max(createdAt, parseISO(schedule.lastRunAt) ?? createdAt)
+            // Every fire due in (since, now], EXCEPT the current minute — which the
+            // normal tick is about to fire and so isn't a miss.
+            let missed = ScheduleEvaluator.expectedFires(
+                after: since, through: now, scheduleHour: schedule.hour, scheduleMinute: schedule.minute,
+                weekdays: schedule.weekdays, calendar: calendar
+            ).filter { minuteKey($0) != minuteKey(now) }
+            guard let last = missed.last, let first = missed.first else { continue }  // nothing missed
+
+            // ONE row per reconciliation, summarizing the whole outage: how many
+            // fires were skipped and the window (first…last missed fire), so a
+            // week-long outage is plainly distinct from a single skipped fire.
+            let count = missed.count
             let when = String(format: "%02d:%02d", schedule.hour, schedule.minute)
-            let message = "missed scheduled restart (\(when)) — the panel was not running at the fire time"
+            let message =
+                count == 1
+                ? "missed a scheduled restart at \(stamp(first)) (\(when)) — the panel was not running"
+                : "missed \(count) scheduled restarts (\(when) daily) — the panel was down from "
+                    + "\(stamp(first)) to \(stamp(last))"
+            // last-run is stamped with the most recent missed slot, so the next
+            // reconciliation's lower bound moves past it and never re-reports it.
             try? store.recordScheduleRun(
-                containerName: schedule.containerName, at: iso(expected), outcome: "missed", message: message)
+                containerName: schedule.containerName, at: iso(last), outcome: "missed", message: message)
             try? store.recordAudit(
                 username: "scheduler", action: "container.schedules", containerName: schedule.containerName,
                 outcome: "missed", sourceIP: nil, detail: message)
         }
+    }
+
+    /// A compact "YYYY-MM-DD HH:MM" stamp in the scheduler's calendar/timezone.
+    private func stamp(_ date: Date) -> String {
+        let c = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        return String(
+            format: "%04d-%02d-%02d %02d:%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0, c.hour ?? 0, c.minute ?? 0)
     }
 
     private func parseISO(_ string: String?) -> Date? {
