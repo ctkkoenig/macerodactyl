@@ -23,6 +23,8 @@ import Testing
         #expect(yaml.contains("    image: \"ghcr.io/pterodactyl/yolks:java_21\""))
         #expect(yaml.contains("    working_dir: /home/container"))
         #expect(yaml.contains("    entrypoint: [\"/bin/bash\", \"-c\"]"))
+        #expect(yaml.contains("    stdin_open: true"))
+        #expect(yaml.contains("    tty: false"))
         #expect(yaml.contains("    restart: unless-stopped"))
     }
 

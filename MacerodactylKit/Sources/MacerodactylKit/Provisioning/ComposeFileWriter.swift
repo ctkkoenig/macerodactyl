@@ -100,6 +100,10 @@ public enum ComposeFileWriter {
         // syntax in the startup works, matching Wings.
         lines.append("    entrypoint: [\"/bin/bash\", \"-c\"]")
         lines.append("    command: [\(yaml(spec.startup))]")
+        // Keep stdin open (no TTY) so `docker attach` can write to the server
+        // process — the basis of a real interactive console (see ConsoleBroker).
+        lines.append("    stdin_open: true")
+        lines.append("    tty: false")
         lines.append("    restart: \(spec.restartPolicy)")
         // Graceful shutdown from the egg's config.stop (T0.3): a specific signal
         // and/or a longer grace window so a save completes before SIGKILL.
