@@ -45,6 +45,7 @@ extension PanelRoutes {
         admin.get("eggs/:id", use: apiAdminEggDetail)
         admin.post("eggs/import", use: apiAdminEggImport)
         admin.get("eggs/:id/export", use: apiAdminEggExport)
+        admin.put("eggs/:id", use: apiAdminEggEdit)
         admin.post("eggs/:id/update", use: apiAdminEggUpdate)
         admin.delete("eggs/:id", use: apiAdminEggDelete)
 
@@ -309,6 +310,70 @@ extension PanelRoutes {
         audit(
             user: user.username, action: "admin.egg.import", outcome: "ok", ip: context.clientIP, detail: egg.name)
         return encode(ImportResultDTO(eggId: eggID, name: egg.name, warnings: warnings))
+    }
+
+    struct EditEggBody: Decodable {
+        var name: String?
+        var author: String?
+        var description: String?
+        var startup: String?
+        var stop: String?
+        var configFiles: String?
+        var configLogs: String?
+        var installScript: String?
+        var installContainer: String?
+        var installEntrypoint: String?
+        var images: [ImageInput]?
+        var variables: [VariableInput]?
+        struct ImageInput: Decodable {
+            let label: String
+            let image: String
+        }
+        struct VariableInput: Decodable {
+            let name: String
+            let description: String?
+            let envVariable: String
+            let defaultValue: String?
+            let userViewable: Bool?
+            let userEditable: Bool?
+            let rules: [String]?
+        }
+    }
+
+    /// Edits a stored egg in place from structured fields, patched into its raw
+    /// JSON server-side (so fields the editor doesn't model are preserved), then
+    /// re-parsed + validated by the same path as import before saving. Same id.
+    @Sendable func apiAdminEggEdit(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let id = try requireInt(context, "id")
+        guard let stored = try store.egg(id: id) else { throw notFound() }
+        guard let body = try? await request.decode(as: EditEggBody.self, context: context) else {
+            return json(["error": "bad request"], status: .badRequest)
+        }
+        let edits = EggEdits(
+            name: body.name, author: body.author, description: body.description, startup: body.startup,
+            stop: body.stop, configFiles: body.configFiles, configLogs: body.configLogs,
+            installScript: body.installScript, installContainer: body.installContainer,
+            installEntrypoint: body.installEntrypoint,
+            images: body.images?.map { (label: $0.label, image: $0.image) },
+            variables: body.variables?.map {
+                EggEdits.VariableEdit(
+                    name: $0.name, description: $0.description ?? "", envVariable: $0.envVariable,
+                    defaultValue: $0.defaultValue ?? "", userViewable: $0.userViewable ?? true,
+                    userEditable: $0.userEditable ?? true, rules: $0.rules ?? [])
+            })
+        let patched: String
+        do { patched = try EggEditor.apply(edits, to: stored.rawJSON) } catch {
+            return json(["error": "could not apply the edits"], status: .badRequest)
+        }
+        let egg: PterodactylEgg
+        do { egg = try EggParser.parse(patched) } catch {
+            return json(["error": "the edited egg is no longer valid (check startup and variables)"], status: .badRequest)
+        }
+        let warnings = EggValidator.validate(egg).map(\.message)
+        try store.updateEgg(id: id, egg: egg, rawJSON: patched)
+        audit(user: user.username, action: "admin.egg.edit", outcome: "ok", ip: context.clientIP, detail: egg.name)
+        return encode(ImportResultDTO(eggId: id, name: egg.name, warnings: warnings))
     }
 
     /// Re-fetches an egg from its declared `meta.update_url` and overwrites it in

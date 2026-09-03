@@ -142,6 +142,7 @@ async function route() {
   try {
     if (id === 'servers' && sub === 'new') { await renderCreateServer(); }
     else if (id === 'servers' && sub === 'edit' && arg) { await renderEditServer(decodeURIComponent(arg)); }
+    else if (id === 'eggs' && sub === 'edit' && arg) { await renderEditEgg(arg); }
     else { await item.render(); }
   } catch (e) { show(pageHeader(item.label), msg(String(e), 'err')); }
 }
@@ -486,6 +487,7 @@ async function renderNests() {
 
   const erows = eggs.map(e => h('tr', null, h('td', { text: e.name }), h('td', { text: nestName[e.nestId] || e.nestId }), h('td', null, badge(e.metaVersion || '?', 'muted')),
     h('td', null, h('div', { class: 'rowact' },
+      h('a', { class: 'btn ghost sm', href: '#eggs/edit/' + e.id }, 'Edit'),
       h('a', { class: 'btn ghost sm', href: '/api/admin/eggs/' + e.id + '/export' }, 'Export'),
       e.updatable ? h('button', { class: 'btn ghost sm', onclick: async () => { if (!confirm('Update "' + e.name + '" from its source URL? Its variables and startup are replaced with the upstream version.')) return; try { const r = await jsend('POST', '/api/admin/eggs/' + e.id + '/update'); alert('Updated "' + r.name + '"' + (r.warnings.length ? ' with warnings: ' + r.warnings.join('; ') : '.')); route(); } catch (err) { alert(err); } } }, 'Update') : null,
       h('button', { class: 'btn ghost sm danger', onclick: async () => { if (!confirm('Delete egg ' + e.name + '?')) return; try { await jsend('DELETE', '/api/admin/eggs/' + e.id); route(); } catch (err) { alert(err); } } }, 'Delete')))));
@@ -502,6 +504,66 @@ async function renderNests() {
   show(pageHeader('Nests & Eggs', 'Egg definitions that servers are created from'),
     tableCard('Nests', ['Name', 'Author', 'Description', ''], nrows), card('Add nest', nnote, nform),
     tableCard('Eggs', ['Name', 'Nest', 'Version', ''], erows), card('Import egg', inote, iform));
+}
+
+// Edit a stored egg: a structured form patched into the egg's JSON server-side.
+async function renderEditEgg(id) {
+  const egg = await jget('/api/admin/eggs/' + enc(id));
+  const note = h('div');
+  const inp = (v, opts = {}) => h('input', Object.assign({ type: 'text', value: v ?? '' }, opts));
+  const ta = (v, rows = 4) => h('textarea', { rows }, v ?? '');
+  const bind = (obj, key, el) => { el.addEventListener('input', () => obj[key] = el.value); return el; };
+  const nameI = inp(egg.name), descI = inp(egg.description), authorI = inp(egg.author);
+  const startupI = ta(egg.startup, 3), stopI = inp(egg.stop);
+  const instScriptI = ta(egg.installScript, 8), instContI = inp(egg.installContainer), instEntryI = inp(egg.installEntrypoint);
+  const cfgFilesI = ta(egg.configFiles, 4), cfgLogsI = ta(egg.configLogs, 2);
+
+  const imagesHost = h('div');
+  let images = egg.images.length ? egg.images.map(i => ({ label: i.label, image: i.image })) : [{ label: '', image: '' }];
+  function drawImages() {
+    imagesHost.replaceChildren(
+      ...images.map((im, i) => h('div', { class: 'form-row' },
+        field('Label', bind(im, 'label', inp(im.label))), field('Image', bind(im, 'image', inp(im.image))),
+        h('button', { class: 'btn ghost sm danger', type: 'button', onclick: () => { images.splice(i, 1); if (!images.length) images.push({ label: '', image: '' }); drawImages(); } }, 'Remove'))),
+      h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { images.push({ label: '', image: '' }); drawImages(); } }, 'Add image'));
+  }
+  drawImages();
+
+  const varsHost = h('div');
+  let vars = egg.variables.map(v => ({ name: v.name, description: v.description || '', envVariable: v.envVariable, defaultValue: v.defaultValue, userViewable: v.userViewable, userEditable: v.userEditable, rules: v.rules || [] }));
+  function chk(obj, key, label) { const c = h('input', { type: 'checkbox' }); c.checked = !!obj[key]; c.addEventListener('change', () => obj[key] = c.checked); return h('label', { class: 'check' }, c, ' ' + label); }
+  function drawVars() {
+    varsHost.replaceChildren(
+      ...vars.map((v, i) => h('div', { class: 'card', style: 'margin-bottom:8px' },
+        h('div', { class: 'form-row' }, field('Name', bind(v, 'name', inp(v.name))), field('Env variable', bind(v, 'envVariable', inp(v.envVariable)))),
+        h('div', { class: 'form-row' }, field('Default value', bind(v, 'defaultValue', inp(v.defaultValue))),
+          field('Rules (pipe-separated)', (() => { const e = inp((v.rules || []).join('|')); e.addEventListener('input', () => v.rules = e.value.split('|').map(s => s.trim()).filter(Boolean)); return e; })())),
+        h('div', { class: 'field' }, chk(v, 'userViewable', 'Viewable'), chk(v, 'userEditable', 'Editable'),
+          h('button', { class: 'btn ghost sm danger', type: 'button', onclick: () => { vars.splice(i, 1); drawVars(); } }, 'Remove variable')))),
+      h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { vars.push({ name: '', description: '', envVariable: '', defaultValue: '', userViewable: true, userEditable: true, rules: [] }); drawVars(); } }, 'Add variable'));
+  }
+  drawVars();
+
+  async function save() {
+    const body = {
+      name: nameI.value, description: descI.value, author: authorI.value,
+      startup: startupI.value, stop: stopI.value,
+      installScript: instScriptI.value, installContainer: instContI.value, installEntrypoint: instEntryI.value,
+      configFiles: cfgFilesI.value, configLogs: cfgLogsI.value,
+      images: images.filter(im => im.image),
+      variables: vars.map(v => ({ name: v.name, description: v.description || '', envVariable: v.envVariable, defaultValue: v.defaultValue || '', userViewable: !!v.userViewable, userEditable: !!v.userEditable, rules: v.rules || [] })),
+    };
+    try { const r = await jsend('PUT', '/api/admin/eggs/' + enc(id), body); note.replaceChildren(msg('Saved "' + r.name + '"' + (r.warnings.length ? ' with warnings: ' + r.warnings.join('; ') : '.'), r.warnings.length ? 'err' : 'ok')); }
+    catch (e) { note.replaceChildren(msg(String(e), 'err')); }
+  }
+
+  show(pageHeader('Edit egg', egg.name),
+    card('Core', field('Name', nameI), field('Description', descI), field('Author', authorI), field('Startup command', startupI), field('Stop command (config.stop)', stopI)),
+    card('Docker images', imagesHost),
+    card('Install script', field('Container image', instContI), field('Entrypoint', instEntryI), field('Script', instScriptI)),
+    card('Config blocks', field('config.files (JSON)', cfgFilesI), field('config.logs (JSON)', cfgLogsI)),
+    card('Variables', varsHost),
+    h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: save }, 'Save egg'), h('a', { class: 'btn ghost', href: '#eggs' }, 'Back')), note);
 }
 
 // --- boot -------------------------------------------------------------------

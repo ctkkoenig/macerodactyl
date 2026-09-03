@@ -373,6 +373,37 @@ import Testing
         }
     }
 
+    @Test func eggEditPatchesFieldsInPlace() async throws {
+        let h = try await makeHarness()
+        try await h.app.test(.router) { client in
+            let token = try await login(client, "admin", h.adminPassword)
+            let eggId = try await importEgg(client, token: token, nestName: "MC", json: sampleEgg)
+            // Edit startup + a variable default via the structured editor.
+            let body = ByteBuffer(
+                string: #"""
+                    {"startup":"java -Xmx2G -jar {{SERVER_JARFILE}}",
+                     "variables":[{"name":"Jar","envVariable":"SERVER_JARFILE","defaultValue":"paper.jar",
+                       "userViewable":true,"userEditable":true,"rules":["required"]}]}
+                    """#)
+            try await client.execute(uri: "/api/admin/eggs/\(eggId)", method: .put, headers: authed(token), body: body) { response in
+                #expect(response.status == .ok)
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                #expect(json["name"] as? String == "Paper")
+            }
+            // The change persisted (same id), and re-parses from the stored JSON.
+            let egg = try #require(try h.store.egg(id: Int64(eggId))).parsed()
+            #expect(egg.startup.contains("-Xmx2G"))
+            #expect(egg.variables.first?.defaultValue == "paper.jar")
+
+            // An edit that breaks the egg (empty startup) is rejected, leaving it intact.
+            try await client.execute(
+                uri: "/api/admin/eggs/\(eggId)", method: .put, headers: authed(token),
+                body: ByteBuffer(string: #"{"startup":""}"#)
+            ) { #expect($0.status == .badRequest) }
+            #expect(try #require(try h.store.egg(id: Int64(eggId))).parsed().startup.contains("-Xmx2G"))
+        }
+    }
+
     @Test func eggUpdateRejectsAnEggWithNoSource() async throws {
         let h = try await makeHarness()
         try await h.app.test(.router) { client in

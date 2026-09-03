@@ -163,6 +163,13 @@ struct EggDetailDTO: Encodable {
     let updateUrl: String?
     let images: [EggImageDTO]
     let variables: [EggVariableDTO]
+    // Raw editable fields, so the admin egg editor can prefill them.
+    let stop: String
+    let installScript: String
+    let installContainer: String
+    let installEntrypoint: String
+    let configFiles: String
+    let configLogs: String
     init(stored: StoredEgg, egg: PterodactylEgg) {
         id = stored.id
         nestId = stored.nestID
@@ -173,6 +180,12 @@ struct EggDetailDTO: Encodable {
         startup = egg.startup
         hasInstallScript = egg.install.isRunnable
         updateUrl = EggParser.updateURL(fromJSON: stored.rawJSON)?.absoluteString
+        stop = egg.configStop
+        installScript = egg.install.script
+        installContainer = egg.install.container
+        installEntrypoint = egg.install.entrypoint
+        configFiles = egg.configFiles
+        configLogs = egg.configLogs
         images = egg.dockerImages.map { EggImageDTO(label: $0.label, image: $0.image) }
         variables = egg.variables.map {
             EggVariableDTO(
