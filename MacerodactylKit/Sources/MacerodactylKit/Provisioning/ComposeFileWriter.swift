@@ -99,7 +99,10 @@ public enum ComposeFileWriter {
         // Run the substituted startup through the container's own bash so shell
         // syntax in the startup works, matching Wings.
         lines.append("    entrypoint: [\"/bin/bash\", \"-c\"]")
-        lines.append("    command: [\(yaml(spec.startup))]")
+        // `literal(...)` doubles `$` → `$$` so `docker compose` does NOT
+        // interpolate shell syntax in the startup ($(...), $VAR) — compose
+        // un-escapes `$$` back to a single `$` for the container's bash.
+        lines.append("    command: [\(literal(spec.startup))]")
         // Keep stdin open (no TTY) so `docker attach` can write to the server
         // process — the basis of a real interactive console (see ConsoleBroker).
         lines.append("    stdin_open: true")
@@ -117,7 +120,7 @@ public enum ComposeFileWriter {
         if !spec.environment.isEmpty {
             lines.append("    environment:")
             for key in spec.environment.keys.sorted() {
-                lines.append("      \(key): \(yaml(spec.environment[key] ?? ""))")
+                lines.append("      \(key): \(literal(spec.environment[key] ?? ""))")
             }
         }
 
@@ -169,6 +172,14 @@ public enum ComposeFileWriter {
     static func formatCPUs(_ value: Double) -> String {
         if value == value.rounded() { return String(Int(value)) }
         return String(value)
+    }
+
+    /// A YAML scalar whose `$` are doubled so `docker compose` variable
+    /// interpolation leaves shell syntax alone (compose turns `$$` back into `$`).
+    /// Used for the startup command and environment values — the fields that
+    /// legitimately contain `$(...)`/`$VAR` meant for the container's own shell.
+    static func literal(_ value: String) -> String {
+        yaml(value.replacingOccurrences(of: "$", with: "$$"))
     }
 
     /// A YAML double-quoted scalar with the escapes YAML requires inside double

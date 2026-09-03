@@ -28,11 +28,18 @@ import Testing
         #expect(yaml.contains("    restart: unless-stopped"))
     }
 
-    @Test func quotesStartupPreservingShellSyntax() {
+    @Test func quotesStartupAndDoublesDollarForCompose() {
         let yaml = ComposeFileWriter.compose(fullSpec())
-        // The inner double-quotes of the startup are escaped for YAML but the
-        // shell syntax ($(...), the quotes) is intact for the container's bash.
-        #expect(yaml.contains(#"    command: ["java -Xmx2048M $( printf %s \"-jar server.jar\" )"]"#))
+        // Inner quotes are YAML-escaped, and every `$` is doubled so docker
+        // compose won't interpolate the shell syntax (it un-escapes $$ → $).
+        #expect(yaml.contains(#"    command: ["java -Xmx2048M $$( printf %s \"-jar server.jar\" )"]"#))
+    }
+
+    @Test func environmentValuesWithDollarAreDoubled() {
+        let spec = ProvisionSpec(
+            name: "x", image: "img", startup: "run", environment: ["MOTD": "Hi $USER welcome"])
+        // A literal $ in an env value must survive compose interpolation.
+        #expect(ComposeFileWriter.compose(spec).contains(#"      MOTD: "Hi $$USER welcome""#))
     }
 
     @Test func mapsAllResourceLimits() {
