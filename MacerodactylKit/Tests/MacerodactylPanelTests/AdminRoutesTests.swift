@@ -165,6 +165,28 @@ import Testing
         }
     }
 
+    @Test func createServerAttachesSelectedMounts() async throws {
+        let h = try await makeHarness()
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try await h.app.test(.router) { client in
+            let token = try await login(client, "admin", h.adminPassword)
+            let eggId = try await importEgg(client, token: token, nestName: "MC", json: sampleEgg)
+            try await generateAllocations(client, token: token, start: 25565, end: 25566)
+            // Create a mount whose source is a real existing dir.
+            let mBody = ByteBuffer(
+                string: #"{"name":"shared","source":"\#(dir.path)","target":"/mnt/shared","readOnly":true}"#)
+            let mountId: Int = try await client.execute(
+                uri: "/api/admin/mounts", method: .post, headers: authed(token), body: mBody
+            ) { ($0.status == .ok ? (try JSONSerialization.jsonObject(with: Data(buffer: $0.body)) as! [String: Any])["id"] as! Int : -1) }
+            let createBody = ByteBuffer(
+                string: #"{"name":"mc-mnt","eggId":\#(eggId),"memoryMiB":512,"mountIds":[\#(mountId)]}"#)
+            try await client.execute(uri: "/api/admin/servers", method: .post, headers: authed(token), body: createBody) { _ in }
+            let spec = try #require(h.service.provisionSpecs.first)
+            #expect(spec.extraMounts.contains { $0.source == dir.path && $0.target == "/mnt/shared" && $0.readOnly })
+        }
+    }
+
     @Test func failedProvisionFreesAllocationsAndMarksFailed() async throws {
         let h = try await makeHarness()
         h.service.provisionShouldFail = true

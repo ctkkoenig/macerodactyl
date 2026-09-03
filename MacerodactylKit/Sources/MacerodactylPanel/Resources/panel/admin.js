@@ -257,7 +257,7 @@ async function renderServers() {
 // Create Server — one long form, matching Pterodactyl's create page.
 async function renderCreateServer() {
   crumbEl.textContent = 'Admin › Servers › Create';
-  const [nests, users] = await Promise.all([jget('/api/admin/nests'), jget('/api/admin/users')]);
+  const [nests, users, mounts] = await Promise.all([jget('/api/admin/nests'), jget('/api/admin/users'), jget('/api/admin/mounts')]);
   const eggsByNest = {};
   const note = h('div');
   const varsBox = h('div', null, h('div', { class: 'hint', text: 'Pick an egg to load its variables.' }));
@@ -311,6 +311,11 @@ async function renderCreateServer() {
         field('CPU pinning', input('cpuset'), 'e.g. 0,1,3 — blank = all'), field('Block IO weight', input('io', { type: 'number' }), '10–1000, blank = default')),
       h('div', { class: 'form-row' }, field('PID limit', input('pids', { type: 'number' }), 'blank = default'),
         h('div', { class: 'field' }, h('label', { text: 'OOM killer' }), h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'oom' }), 'Kill on memory breach')))),
+    mounts.length ? h('fieldset', null, h('legend', { text: 'Mounts' }),
+      h('div', { class: 'hint' }, 'Attach admin-defined host mounts to this server.'),
+      ...mounts.map(m => h('label', { class: 'check', style: 'margin:6px 0' },
+        h('input', { type: 'checkbox', name: 'mount:' + m.id }),
+        h('span', null, m.name, ' ', h('span', { class: 'mono', text: m.source + ' → ' + m.target + (m.readOnly ? ' (ro)' : '') }))))) : null,
     h('fieldset', null, h('legend', { text: 'Service variables' }), varsBox),
     h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'submit' }, 'Create server'), h('a', { class: 'btn ghost', href: '#servers' }, 'Cancel')), note);
 
@@ -318,13 +323,15 @@ async function renderCreateServer() {
     e.preventDefault();
     const values = {};
     form.querySelectorAll('[name^="var:"]').forEach(el => { values[el.name.slice(4)] = el.value; });
+    const mountIds = [];
+    form.querySelectorAll('[name^="mount:"]:checked').forEach(el => mountIds.push(parseInt(el.name.slice(6), 10)));
     const body = {
       name: slugify(val(form, 'name')), eggId: parseInt(eggSel.value, 10) || 0,
       ownerUserId: form.querySelector('[name=owner]').value ? parseInt(form.querySelector('[name=owner]').value, 10) : null,
       image: form.querySelector('[name=image]') ? form.querySelector('[name=image]').value : null,
       memoryMiB: num(form, 'mem'), swapMiB: num(form, 'swap'), diskMiB: num(form, 'disk'), cpuPercent: num(form, 'cpu'),
       cpuPinning: val(form, 'cpuset') || null, ioWeight: val(form, 'io') ? num(form, 'io') : null, pidsLimit: val(form, 'pids') ? num(form, 'pids') : null,
-      oomKillDisable: chk(form, 'oom'), additionalAllocations: num(form, 'extra'), values,
+      oomKillDisable: chk(form, 'oom'), additionalAllocations: num(form, 'extra'), values, mountIds,
     };
     if (!body.name) { note.replaceChildren(msg('A server name needs at least one letter or number.', 'err')); return; }
     if (!body.eggId) { note.replaceChildren(msg('Choose an egg to create from.', 'err')); return; }

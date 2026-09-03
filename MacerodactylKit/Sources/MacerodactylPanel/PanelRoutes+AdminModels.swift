@@ -229,6 +229,7 @@ struct CreateServerBody: Decodable {
     let oomKillDisable: Bool?
     let additionalAllocations: Int?
     let values: [String: String]?
+    let mountIds: [Int64]?
 }
 
 struct DatabaseDTO: Encodable {
@@ -332,16 +333,32 @@ extension PanelRoutes {
         let mappings = reserved.map {
             PortMapping(hostIP: $0.ip, hostPort: $0.port, containerPort: $0.port, proto: $0.proto)
         }
+        // Resolve any selected admin mounts into real binds (host source must
+        // exist and not be a system-critical path). Invalid ones are skipped.
+        var extraMounts: [VolumeMount] = []
+        var linkedMountIds: [Int64] = []
+        if let mountIds = body.mountIds, !mountIds.isEmpty {
+            let byID = Dictionary(uniqueKeysWithValues: ((try? store.listMounts()) ?? []).map { ($0.id, $0) })
+            for id in mountIds {
+                guard let mount = byID[id], Self.mountSourceIsValid(mount.source) else { continue }
+                extraMounts.append(VolumeMount(source: mount.source, target: mount.target, readOnly: mount.readOnly))
+                linkedMountIds.append(id)
+            }
+        }
+
         let stop = ServerStop.from(configStop: egg.configStop)
         let spec = ProvisionSpec(
             name: name, image: image, startup: resolved.startup.value, environment: resolved.environment,
-            install: egg.install, limits: limits, portMappings: mappings, configFiles: egg.configFiles,
-            stopSignal: stop.signal, stopGracePeriodSeconds: stop.graceSeconds)
+            install: egg.install, limits: limits, portMappings: mappings, extraMounts: extraMounts,
+            configFiles: egg.configFiles, stopSignal: stop.signal, stopGracePeriodSeconds: stop.graceSeconds)
 
         // Persist the record BEFORE streaming so a crash mid-install is visible.
-        try? store.createServerRecord(
+        let serverID = try? store.createServerRecord(
             uuid: uuid, name: name, eggID: stored.id, dockerImage: image, ownerUserID: body.ownerUserId,
             limits: limits, startup: egg.startup, values: resolved.environment, status: "installing")
+        if let serverID {
+            for mountID in linkedMountIds { try? store.linkServerMount(serverID: serverID, mountID: mountID) }
+        }
         audit(
             user: user.username, action: "admin.server.create", container: name, outcome: "started",
             ip: context.clientIP, detail: egg.name)
@@ -350,6 +367,20 @@ extension PanelRoutes {
         return Self.sseResponse(
             payloads: finalizeProvision(
                 base, name: name, ownerUserID: body.ownerUserId, adminUser: user.username, ip: context.clientIP))
+    }
+
+    /// A mount source must be an existing absolute host path that isn't a
+    /// system-critical directory or the docker socket. Admin-only, but a bad
+    /// mount can wreck a host, so it's checked.
+    static func mountSourceIsValid(_ source: String) -> Bool {
+        guard source.hasPrefix("/") else { return false }
+        let std = URL(fileURLWithPath: source).standardizedFileURL.path
+        let blocked: Set<String> = [
+            "/", "/etc", "/usr", "/bin", "/sbin", "/lib", "/boot", "/dev", "/proc", "/sys",
+            "/var", "/var/run", "/run", "/System", "/Library", "/var/run/docker.sock",
+        ]
+        guard !blocked.contains(std) else { return false }
+        return FileManager.default.fileExists(atPath: std)
     }
 
     /// Forwards the provisioning log and, when it completes, flips the server

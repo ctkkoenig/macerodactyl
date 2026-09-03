@@ -506,6 +506,28 @@ extension PanelDataStore {
         try db.run("DELETE FROM mounts WHERE id = ?", [.integer(id)])
     }
 
+    /// Associates a mount with a server (for display/management; the actual bind
+    /// is written into the server's compose at create time).
+    public func linkServerMount(serverID: Int64, mountID: Int64) throws {
+        try db.run(
+            "INSERT OR IGNORE INTO server_mounts (server_id, mount_id) VALUES (?, ?)",
+            [.integer(serverID), .integer(mountID)])
+    }
+
+    public func mountsForServer(serverID: Int64) throws -> [MountRecord] {
+        try db.query(
+            """
+            SELECT m.* FROM mounts m JOIN server_mounts sm ON sm.mount_id = m.id
+            WHERE sm.server_id = ? ORDER BY m.name
+            """, [.integer(serverID)]
+        ).map {
+            MountRecord(
+                id: $0["id"]!.asInt!, name: $0["name"]?.asString ?? "", source: $0["source"]?.asString ?? "",
+                target: $0["target"]?.asString ?? "", readOnly: ($0["read_only"]?.asInt ?? 0) != 0,
+                mountDescription: $0["description"]?.asString)
+        }
+    }
+
     // MARK: JSON helper
 
     static func encodeJSON(_ value: Any) -> String? {
