@@ -156,7 +156,27 @@ import Testing
             ContainerStats(
                 name: "x", cpuPercent: 0, memUsedBytes: 0, memLimitBytes: 0, memPercent: 0,
                 netRxBytes: 0, netTxBytes: 0, pids: 0, measuredAt: Date()))
-        #expect(PanelSchema.currentVersion == 10)
+        #expect(PanelSchema.currentVersion == 11)
+    }
+
+    @Test func migratesToV11AddingSchedulesTable() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try PanelDataStore(databasePath: dir.appending(path: "v11.sqlite").path)
+        // The schedules table exists and round-trips a row with weekdays + run log.
+        #expect(try store.listSchedules().isEmpty)
+        try store.upsertSchedule(containerName: "bot", hour: 4, minute: 30, weekdays: [1, 3, 5])
+        let row = try #require(try store.schedule(containerName: "bot"))
+        #expect(row.hour == 4 && row.minute == 30 && row.weekdays == [1, 3, 5])
+        #expect(row.lastRunAt == nil)
+        try store.recordScheduleRun(containerName: "bot", at: "2026-09-03T04:30:00.000Z", outcome: "ok", message: "restarted bot")
+        #expect(try store.schedule(containerName: "bot")?.lastOutcome == "ok")
+        // Re-setting clears the run history (matches a rewritten launchd agent).
+        try store.upsertSchedule(containerName: "bot", hour: 5, minute: 0, weekdays: [])
+        let reset = try #require(try store.schedule(containerName: "bot"))
+        #expect(reset.hour == 5 && reset.weekdays.isEmpty && reset.lastRunAt == nil)
+        try store.deleteSchedule(containerName: "bot")
+        #expect(try store.schedule(containerName: "bot") == nil)
     }
 
     @Test func migratesToV9AddingBackupsPermissionAndTable() throws {

@@ -1,0 +1,90 @@
+import Foundation
+
+/// DB-backed scheduled restarts — the cross-platform source of truth used by the
+/// server deploy (macerodactyld's in-process cron loop). On macOS the native app
+/// still drives launchd directly; this table is what makes schedules fire on a
+/// Linux host where launchd does not exist.
+extension PanelDataStore {
+    /// One persisted schedule row, plus the outcome of its most recent run.
+    public struct PersistedSchedule: Sendable, Equatable, Identifiable {
+        public var containerName: String
+        public var hour: Int
+        public var minute: Int
+        /// launchd weekday numbers (0=Sun…6=Sat); empty means every day.
+        public var weekdays: Set<Int>
+        public var lastRunAt: String?
+        public var lastOutcome: String?
+        public var lastMessage: String?
+
+        public var id: String { containerName }
+
+        public init(
+            containerName: String, hour: Int, minute: Int, weekdays: Set<Int>,
+            lastRunAt: String? = nil, lastOutcome: String? = nil, lastMessage: String? = nil
+        ) {
+            self.containerName = containerName
+            self.hour = hour
+            self.minute = minute
+            self.weekdays = weekdays
+            self.lastRunAt = lastRunAt
+            self.lastOutcome = lastOutcome
+            self.lastMessage = lastMessage
+        }
+    }
+
+    private static func encodeWeekdays(_ weekdays: Set<Int>) -> String {
+        weekdays.sorted().map(String.init).joined(separator: ",")
+    }
+
+    private static func decodeWeekdays(_ text: String?) -> Set<Int> {
+        Set((text ?? "").split(separator: ",").compactMap { Int($0) }.filter { (0...6).contains($0) })
+    }
+
+    private func scheduleFromRow(_ row: [String: SQLValue]) -> PersistedSchedule {
+        PersistedSchedule(
+            containerName: row["container_name"]?.asString ?? "",
+            hour: Int(row["hour"]?.asInt ?? 0),
+            minute: Int(row["minute"]?.asInt ?? 0),
+            weekdays: Self.decodeWeekdays(row["weekdays"]?.asString),
+            lastRunAt: row["last_run_at"]?.asString,
+            lastOutcome: row["last_outcome"]?.asString,
+            lastMessage: row["last_message"]?.asString)
+    }
+
+    /// Creates or replaces the schedule for a container. Run history is cleared
+    /// on a re-set, matching launchd (a rewritten agent has no prior result yet).
+    public func upsertSchedule(containerName: String, hour: Int, minute: Int, weekdays: Set<Int>) throws {
+        try db.run(
+            """
+            INSERT INTO schedules (container_name, hour, minute, weekdays)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(container_name) DO UPDATE SET
+                hour=excluded.hour, minute=excluded.minute, weekdays=excluded.weekdays,
+                last_run_at=NULL, last_outcome=NULL, last_message=NULL
+            """,
+            [
+                .text(containerName), .integer(Int64(min(max(hour, 0), 23))),
+                .integer(Int64(min(max(minute, 0), 59))), .text(Self.encodeWeekdays(weekdays)),
+            ])
+    }
+
+    public func deleteSchedule(containerName: String) throws {
+        try db.run("DELETE FROM schedules WHERE container_name = ?", [.text(containerName)])
+    }
+
+    public func schedule(containerName: String) throws -> PersistedSchedule? {
+        try db.query("SELECT * FROM schedules WHERE container_name = ?", [.text(containerName)])
+            .first.map(scheduleFromRow)
+    }
+
+    public func listSchedules() throws -> [PersistedSchedule] {
+        try db.query("SELECT * FROM schedules ORDER BY container_name").map(scheduleFromRow)
+    }
+
+    /// Records the outcome of a scheduled run.
+    public func recordScheduleRun(containerName: String, at iso: String, outcome: String, message: String) throws {
+        try db.run(
+            "UPDATE schedules SET last_run_at = ?, last_outcome = ?, last_message = ? WHERE container_name = ?",
+            [.text(iso), .text(outcome), .text(message), .text(containerName)])
+    }
+}

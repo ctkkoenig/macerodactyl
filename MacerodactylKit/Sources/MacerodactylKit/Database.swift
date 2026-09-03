@@ -205,7 +205,7 @@ public enum PanelBackup {
 /// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
 /// scoping, and audit never have to be retrofitted into the data model.
 public enum PanelSchema {
-    public static let currentVersion = 10
+    public static let currentVersion = 11
 
     public static func migrate(_ db: Database) throws {
         if db.userVersion < 1 {
@@ -465,6 +465,26 @@ public enum PanelSchema {
             // immutable slug). Servers become editable after creation.
             try db.execute("ALTER TABLE server_records ADD COLUMN display_name TEXT")
             db.userVersion = 10
+        }
+        if db.userVersion < 11 {
+            // DB-backed scheduled restarts, the cross-platform source of truth.
+            // On macOS the native app still drives launchd; on the Linux/server
+            // deploy macerodactyld's in-process cron loop reads this table (there
+            // is no launchd there). `weekdays` is a comma-separated list of
+            // launchd weekday numbers (0=Sun…6=Sat); empty means every day.
+            try db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schedules (
+                    container_name TEXT PRIMARY KEY,
+                    hour INTEGER NOT NULL,
+                    minute INTEGER NOT NULL,
+                    weekdays TEXT NOT NULL DEFAULT '',
+                    last_run_at TEXT,
+                    last_outcome TEXT,
+                    last_message TEXT
+                );
+                """)
+            db.userVersion = 11
         }
     }
 }

@@ -9,12 +9,17 @@ import MacerodactylKit
 public struct DaemonContainerService: ContainerService {
     let cli: DockerCLI
     let stacksRoot: URL
+    /// When set, scheduled restarts are DB-backed (the server deploy, where
+    /// launchd does not exist and macerodactyld's in-process cron loop reads the
+    /// same rows). When nil, schedules fall back to launchd (macOS-side tools).
+    let store: PanelDataStore?
     /// Shared across requests so one attach session per container is reused.
     let consoleHub = ConsoleHub()
 
-    public init(cli: DockerCLI, stacksRoot: URL) {
+    public init(cli: DockerCLI, stacksRoot: URL, store: PanelDataStore? = nil) {
         self.cli = cli
         self.stacksRoot = stacksRoot
+        self.store = store
     }
 
     /// All containers (including stopped), grouped so the app's own container is
@@ -100,6 +105,13 @@ public struct DaemonContainerService: ContainerService {
     }
 
     public func schedule(containerName: String) async -> (RestartSchedule, ScheduleRunResult?)? {
+        // DB-backed on the server; launchd only when no store is wired.
+        if let store {
+            guard let row = try? store.schedule(containerName: containerName) else { return nil }
+            let schedule = RestartSchedule(
+                containerName: row.containerName, hour: row.hour, minute: row.minute, weekdays: row.weekdays)
+            return (schedule, Self.runResult(from: row))
+        }
         guard let service = try? ScheduleService(dockerPath: cli.binary.path),
             let schedule = service.schedule(forContainerName: containerName)
         else { return nil }
@@ -107,13 +119,37 @@ public struct DaemonContainerService: ContainerService {
     }
 
     public func setSchedule(containerName: String, hour: Int, minute: Int, weekdays: Set<Int>) async throws {
+        if let store {
+            try store.upsertSchedule(containerName: containerName, hour: hour, minute: minute, weekdays: weekdays)
+            return
+        }
         let service = try ScheduleService(dockerPath: cli.binary.path)
         try service.install(RestartSchedule(containerName: containerName, hour: hour, minute: minute, weekdays: weekdays))
     }
 
     public func removeSchedule(containerName: String) async throws {
+        if let store {
+            try store.deleteSchedule(containerName: containerName)
+            return
+        }
         let service = try ScheduleService(dockerPath: cli.binary.path)
         try service.remove(containerName: containerName)
+    }
+
+    /// Reconstructs a `ScheduleRunResult` from a persisted schedule's last-run
+    /// columns so the web contract (last run date/outcome/message) is unchanged.
+    private static func runResult(from row: PanelDataStore.PersistedSchedule) -> ScheduleRunResult? {
+        guard let iso = row.lastRunAt else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = formatter.date(from: iso) ?? ISO8601DateFormatter().date(from: iso) ?? Date(timeIntervalSince1970: 0)
+        let outcome: ScheduleOutcome =
+            switch row.lastOutcome {
+            case "ok": .success
+            case "timedOut": .timedOut
+            default: .failed
+            }
+        return ScheduleRunResult(date: date, outcome: outcome, message: row.lastMessage ?? "")
     }
 
     public func dockerReachable() async -> Bool {

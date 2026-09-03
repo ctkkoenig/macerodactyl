@@ -57,6 +57,12 @@ public struct ScheduleRunResult: Sendable, Equatable {
     public let outcome: ScheduleOutcome
     public let message: String
 
+    public init(date: Date, outcome: ScheduleOutcome, message: String) {
+        self.date = date
+        self.outcome = outcome
+        self.message = message
+    }
+
     public var succeeded: Bool { outcome == .success }
 }
 

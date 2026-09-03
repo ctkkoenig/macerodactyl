@@ -49,8 +49,25 @@ if let created = try? await AccountManager(store: store).createFirstAdminIfNeede
     }
 }
 
-let containers = DaemonContainerService(cli: cli, stacksRoot: config.stacksRootURL)
+let containers = DaemonContainerService(cli: cli, stacksRoot: config.stacksRootURL, store: store)
 let server = PanelServer(store: store, containers: containers)
+
+// Cross-platform scheduled restarts. launchd does not exist on this (Linux)
+// host, so the DB-backed schedules the web writes are fired by an in-process
+// cron loop instead. Restart-only — this never starts a container at boot;
+// compose restart policies own that. Each restart runs under a hard deadline so
+// a hung docker (stale socket) is recorded as a timeout, not awaited forever.
+let scheduler = InProcessScheduler(store: store) { name in
+    do {
+        _ = try await cli.run(["restart", name], timeout: .seconds(60))
+        return .success("restarted \(name)")
+    } catch DockerError.timeout {
+        return .timedOut("docker restart \(name) timed out (the daemon may be down or the socket is stale)")
+    } catch {
+        return .failed("docker restart \(name) failed: \(error)")
+    }
+}
+let schedulerTask = Task { await scheduler.run() }
 
 // TLS is opt-in for LAN-without-tunnel: generate a self-signed cert on demand.
 // Fail CLOSED — someone who enabled HTTPS must never be silently downgraded to
@@ -76,6 +93,8 @@ logger.notice("macerodactyld serving \(scheme) on \(host):\(config.port) — doc
 do {
     try await server.runUntilTerminated(
         config: .init(port: config.port, bindLAN: config.bindLAN, tls: tlsFiles), logger: logger)
+    schedulerTask.cancel()
 } catch {
+    schedulerTask.cancel()
     fail("server error: \(error)")
 }
