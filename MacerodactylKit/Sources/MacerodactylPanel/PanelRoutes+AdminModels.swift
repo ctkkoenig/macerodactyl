@@ -8,6 +8,27 @@ import NIOCore
 // handlers for readability. Optionals encode via `encodeIfPresent` (omitted when
 // nil), so request bodies can share a type with list responses.
 
+struct AuditDTO: Encodable {
+    let id: Int64
+    let timestamp: String
+    let username: String
+    let action: String
+    let container: String?
+    let outcome: String
+    let ip: String?
+    let detail: String?
+    init(_ e: AuditEntry) {
+        id = e.id
+        timestamp = e.timestamp
+        username = e.username
+        action = e.action
+        container = e.containerName
+        outcome = e.outcome
+        ip = e.sourceIP
+        detail = e.detail
+    }
+}
+
 struct OverviewDTO: Encodable {
     let servers: Int
     let users: Int

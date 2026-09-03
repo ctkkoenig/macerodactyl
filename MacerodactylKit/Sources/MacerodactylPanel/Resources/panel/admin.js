@@ -105,6 +105,7 @@ const chk = (form, n) => form.querySelector(`[name="${n}"]`).checked;
 const SECTIONS = [
   { group: 'Basic administration', items: [
     { id: 'overview', label: 'Overview', ico: '▤', render: renderOverview },
+    { id: 'audit', label: 'Audit log', ico: '❑', render: renderAudit },
     { id: 'settings', label: 'Settings', ico: '⚙', render: renderSettings },
   ] },
   { group: 'Management', items: [
@@ -152,6 +153,21 @@ async function renderOverview() {
       tile(o.servers, 'Servers'), tile(o.users, 'Users'), tile(o.eggs, 'Eggs'),
       tile(o.allocationsFree + ' / ' + o.allocationsTotal, 'Free allocations'),
       tile(o.dockerReachable ? 'Ready' : 'Down', 'Docker')));
+}
+
+// Audit log
+async function renderAudit() {
+  const rows = await jget('/api/admin/audit');
+  const trs = rows.map(a => h('tr', null,
+    h('td', { class: 'mono', text: (a.timestamp || '').replace('T', ' ').replace(/\..*/, '') }),
+    h('td', { text: a.username }),
+    h('td', { text: a.action }),
+    h('td', { text: a.container || '—' }),
+    h('td', null, badge(a.outcome, a.outcome === 'ok' ? 'good' : (a.outcome === 'denied' || a.outcome === 'error') ? 'bad' : 'muted')),
+    h('td', { class: 'mono', text: a.ip || '—' }),
+    h('td', { text: a.detail || '' })));
+  show(pageHeader('Audit log', 'Every action taken through the panel'),
+    tableCard('Recent activity', ['Time', 'User', 'Action', 'Server', 'Outcome', 'IP', 'Detail'], trs));
 }
 
 // Settings

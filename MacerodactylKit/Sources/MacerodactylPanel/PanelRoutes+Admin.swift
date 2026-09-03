@@ -13,6 +13,7 @@ extension PanelRoutes {
         let admin = api.group("admin").add(middleware: RequireAdmin())
 
         admin.get("overview", use: apiAdminOverview)
+        admin.get("audit", use: apiAdminAudit)
         admin.get("settings", use: apiAdminSettingsGet)
         admin.put("settings", use: apiAdminSettingsSet)
 
@@ -63,6 +64,14 @@ extension PanelRoutes {
                 servers: servers.count, users: users.count, eggs: eggs.count,
                 allocationsFree: allocs.filter(\.isFree).count, allocationsTotal: allocs.count,
                 dockerReachable: await containers.dockerReachable()))
+    }
+
+    /// The audit trail over HTTP — the only way to read it on a headless server
+    /// deployment (there's no native app there). Admin-only.
+    @Sendable func apiAdminAudit(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        _ = try context.requireIdentity()
+        let limit = request.uri.queryParameters["limit"].flatMap { Int($0) }.map { min(max($0, 1), 1000) } ?? 300
+        return encode(try store.listAudit(limit: limit).map(AuditDTO.init))
     }
 
     @Sendable func apiAdminSettingsGet(_ request: Request, context: PanelRequestContext) async throws -> Response {

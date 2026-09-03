@@ -45,12 +45,12 @@ struct PanelRoutes {
 
         // Static frontend assets (no secrets — this is the client code). Served
         // from a fixed allow-list, never a filename from the URL.
-        router.get("assets/panel.css", use: { _, _ in Self.asset(.panelCSS) })
-        router.get("assets/panel.js", use: { _, _ in Self.asset(.panelJS) })
-        router.get("assets/login.css", use: { _, _ in Self.asset(.loginCSS) })
-        router.get("assets/login.js", use: { _, _ in Self.asset(.loginJS) })
-        router.get("assets/admin.css", use: { _, _ in Self.asset(.adminCSS) })
-        router.get("assets/admin.js", use: { _, _ in Self.asset(.adminJS) })
+        router.get("assets/panel.css", use: { req, _ in Self.asset(.panelCSS, req) })
+        router.get("assets/panel.js", use: { req, _ in Self.asset(.panelJS, req) })
+        router.get("assets/login.css", use: { req, _ in Self.asset(.loginCSS, req) })
+        router.get("assets/login.js", use: { req, _ in Self.asset(.loginJS, req) })
+        router.get("assets/admin.css", use: { req, _ in Self.asset(.adminCSS, req) })
+        router.get("assets/admin.js", use: { req, _ in Self.asset(.adminJS, req) })
         // The admin SPA shell — a separate bundle from the phone panel. The HTML
         // is public client code (no secrets); a non-admin who loads it is bounced
         // client-side, and every /api/admin/* call it makes is RequireAdmin-gated.
@@ -137,10 +137,17 @@ struct PanelRoutes {
     /// content-hashed (no build step), so a long cache would leave browsers on a
     /// stale panel for up to that lifetime after the app is updated. The files
     /// are tiny, so revalidation is cheap.
-    static func asset(_ asset: PanelAssets.Asset) -> Response {
-        Response(
+    static func asset(_ asset: PanelAssets.Asset, _ request: Request) -> Response {
+        let etag = PanelAssets.etag(asset)
+        // Strong validator + no-cache: the browser revalidates every load and
+        // gets a 304 when the asset is byte-identical, a fresh 200 the moment it
+        // changes — so a panel update is never masked by a stale cached bundle.
+        if request.headers[.ifNoneMatch] == etag {
+            return Response(status: .notModified, headers: [.eTag: etag, .cacheControl: "no-cache"])
+        }
+        return Response(
             status: .ok,
-            headers: [.contentType: asset.contentType, .cacheControl: "no-cache"],
+            headers: [.contentType: asset.contentType, .cacheControl: "no-cache", .eTag: etag],
             body: .init(byteBuffer: ByteBuffer(string: PanelAssets.string(asset))))
     }
 
