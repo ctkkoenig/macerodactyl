@@ -106,6 +106,18 @@ import Testing
         }
     }
 
+    @Test func resetPageIsServedAndReferencesItsScript() async throws {
+        let h = try await makeHarness()
+        try await h.app.test(.router) { client in
+            // The reset page serves to anyone with the link (the token is checked
+            // on submit) and references the script the browser loads to drive it.
+            try await client.execute(uri: "/reset?token=whatever", method: .get) { response in
+                #expect(response.status == .ok)
+                #expect(String(buffer: response.body).contains("/assets/reset.js"))
+            }
+        }
+    }
+
     @Test func invalidTokenIsRejected() async throws {
         let h = try await makeHarness()
         try await h.app.test(.router) { client in

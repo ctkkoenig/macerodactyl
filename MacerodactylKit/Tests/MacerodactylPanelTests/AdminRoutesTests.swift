@@ -240,12 +240,34 @@ import Testing
             ) {
                 #expect($0.status == .ok)
             }
-            // The owner can no longer power it (read-only while suspended).
+            // The owner can no longer mutate it through ANY route a browser can
+            // reach — not just power. Every non-idempotent method is frozen,
+            // INCLUDING subusers and allocations (which require only `view` but
+            // whose mutations would change grants or, worse, restart the stopped
+            // container by recreating it). GET routes still work (read-only).
             let scopedToken = try await login(client, "scoped", h.scopedPassword)
+            let blocked: [(String, HTTPRequest.Method, String?)] = [
+                ("/api/containers/mc1/power", .post, #"{"action":"stop"}"#),
+                ("/api/containers/mc1/console/input", .post, #"{"line":"help"}"#),
+                ("/api/containers/mc1/files/dir", .post, #"{"path":"x"}"#),
+                ("/api/containers/mc1/backups", .post, #"{}"#),
+                ("/api/containers/mc1/schedule", .post, #"{"hour":1,"minute":0,"weekdays":[]}"#),
+                ("/api/containers/mc1/subusers", .put, #"{"username":"x","permissions":["console"]}"#),
+                ("/api/containers/mc1/allocations", .post, #"{"id":1}"#),
+                ("/api/containers/mc1/allocations/1/primary", .post, nil),
+                ("/api/containers/mc1/recreate", .post, nil),
+            ]
+            for (uri, method, body) in blocked {
+                try await client.execute(
+                    uri: uri, method: method, headers: authed(scopedToken),
+                    body: body.map { ByteBuffer(string: $0) }
+                ) { #expect($0.status == .forbidden, "\(method) \(uri) must be frozen while suspended") }
+            }
+            // A read still succeeds while suspended.
             try await client.execute(
-                uri: "/api/containers/mc1/power", method: .post, headers: authed(scopedToken),
-                body: ByteBuffer(string: #"{"action":"stop"}"#)
-            ) { #expect($0.status == .forbidden) }
+                uri: "/api/containers/mc1/activity", method: .get,
+                headers: [.cookie: "\(PanelSession.cookieName)=\(scopedToken)"]
+            ) { #expect($0.status == .ok) }
             // Admin unsuspends.
             try await client.execute(
                 uri: "/api/admin/servers/mc1/unsuspend", method: .post, headers: authed(adminToken), body: ByteBuffer(string: "{}")

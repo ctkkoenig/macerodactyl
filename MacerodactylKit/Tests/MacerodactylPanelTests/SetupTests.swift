@@ -31,8 +31,14 @@ import Testing
                     #expect(response.headers[.location] == "/setup")
                 }
             }
-            // The setup page itself serves while empty.
-            try await client.execute(uri: "/setup", method: .get) { #expect($0.status == .ok) }
+            // The setup page itself serves while empty AND references the script
+            // the browser will load to drive it — the served-page layer the JSON
+            // API tests never see.
+            try await client.execute(uri: "/setup", method: .get) { response in
+                #expect(response.status == .ok)
+                let body = String(buffer: response.body)
+                #expect(body.contains("/assets/setup.js"))
+            }
         }
     }
 

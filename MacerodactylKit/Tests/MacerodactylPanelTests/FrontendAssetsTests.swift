@@ -39,6 +39,39 @@ import Testing
         #expect(js.contains("textContent"))
     }
 
+    /// The served-page flows a browser actually drives (not the JSON API the
+    /// route tests hit): the setup and reset pages must POST to the right
+    /// endpoint AND carry the custom CSRF header — a served page that hit the
+    /// wrong endpoint or dropped the header is exactly the kind of gap that the
+    /// API-only tests can't see (the class of the earlier 2FA served-page bug).
+    @Test func setupAndResetJSPostToTheirEndpointsWithCSRF() {
+        let csrf = PanelHeaders.csrf.canonicalName  // "x-macerodactyl-csrf"
+        let setup = PanelAssets.string(.setupJS)
+        #expect(setup.contains("'/setup'") || setup.contains("\"/setup\""))
+        #expect(setup.lowercased().contains(csrf), "setup.js must send the CSRF header")
+        #expect(setup.contains("location.href"), "setup.js signs the new admin in")
+        for sink in ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"] {
+            #expect(!setup.contains(sink))
+        }
+
+        let reset = PanelAssets.string(.resetJS)
+        #expect(reset.contains("'/reset'") || reset.contains("\"/reset\""))
+        #expect(reset.lowercased().contains(csrf), "reset.js must send the CSRF header")
+        #expect(reset.contains("URLSearchParams") || reset.contains("token"), "reset.js reads the token from the link")
+        for sink in ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"] {
+            #expect(!reset.contains(sink))
+        }
+    }
+
+    /// The served login page — where the 2FA flow lives — must drive the second
+    /// factor from the page itself (send CSRF, react to `totpRequired`), since
+    /// that page interaction is precisely what an API-only test never exercises.
+    @Test func loginJSDrivesTheTwoFactorFlow() {
+        let js = PanelAssets.string(.loginJS)
+        #expect(js.lowercased().contains(PanelHeaders.csrf.canonicalName), "login.js must send the CSRF header")
+        #expect(js.contains("totpRequired"), "login.js must handle the 2FA challenge the server returns")
+    }
+
     @Test func allAssetsLoadAndAreNonEmpty() {
         for asset in PanelAssets.Asset.allCases {
             #expect(!PanelAssets.string(asset).isEmpty, "\(asset.rawValue) should load from the bundle")
