@@ -205,7 +205,7 @@ public enum PanelBackup {
 /// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
 /// scoping, and audit never have to be retrofitted into the data model.
 public enum PanelSchema {
-    public static let currentVersion = 14
+    public static let currentVersion = 15
 
     public static func migrate(_ db: Database) throws {
         if db.userVersion < 1 {
@@ -534,6 +534,24 @@ public enum PanelSchema {
                 CREATE INDEX IF NOT EXISTS idx_schedule_tasks_container ON schedule_tasks(container_name, seq);
                 """)
             db.userVersion = 14
+        }
+        if db.userVersion < 15 {
+            // Managed databases: real provisioning against a shared MariaDB. Add
+            // the scoped user's password + a "managed" flag to the existing
+            // (bookkeeping-only) server_databases, and a one-row engine config
+            // holding the shared container's root password + published port.
+            try db.execute(
+                """
+                ALTER TABLE server_databases ADD COLUMN password TEXT;
+                ALTER TABLE server_databases ADD COLUMN managed INTEGER NOT NULL DEFAULT 0;
+                CREATE TABLE IF NOT EXISTS db_engine (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    root_password TEXT NOT NULL,
+                    host_port INTEGER NOT NULL,
+                    image TEXT NOT NULL
+                );
+                """)
+            db.userVersion = 15
         }
     }
 

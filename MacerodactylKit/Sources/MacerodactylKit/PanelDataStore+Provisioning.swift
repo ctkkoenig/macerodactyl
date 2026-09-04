@@ -104,6 +104,26 @@ public struct ServerDatabaseRecord: Sendable, Equatable, Identifiable {
     public var port: Int?
     public var username: String?
     public var remote: String?
+    /// The scoped user's password — present only for a database Macerodactyl
+    /// actually provisioned (`managed`). Shown once in the connection details.
+    public var password: String?
+    /// True when Macerodactyl created the real database + user (so deleting it
+    /// drops them); false for a legacy bookkeeping-only record.
+    public var managed: Bool = false
+}
+
+/// The shared managed-database engine (one MariaDB container). Its root password
+/// and published port live in the panel DB; the panel uses them to create/drop
+/// databases and to show connection details.
+public struct DatabaseEngineConfig: Sendable, Equatable {
+    public var rootPassword: String
+    public var hostPort: Int
+    public var image: String
+    public init(rootPassword: String, hostPort: Int, image: String) {
+        self.rootPassword = rootPassword
+        self.hostPort = hostPort
+        self.image = image
+    }
 }
 
 public struct MountRecord: Sendable, Equatable, Identifiable {
@@ -572,13 +592,59 @@ extension PanelDataStore {
 
     // MARK: Databases
 
+    private func databaseFromRow(_ row: [String: SQLValue], serverID: Int64) -> ServerDatabaseRecord {
+        ServerDatabaseRecord(
+            id: row["id"]!.asInt!, serverID: serverID, name: row["name"]?.asString ?? "",
+            host: row["host"]?.asString, port: row["port"]?.asInt.map(Int.init),
+            username: row["username"]?.asString, remote: row["remote"]?.asString,
+            password: row["password"]?.asString, managed: (row["managed"]?.asInt ?? 0) != 0)
+    }
+
     public func listDatabases(serverID: Int64) throws -> [ServerDatabaseRecord] {
-        try db.query("SELECT * FROM server_databases WHERE server_id = ? ORDER BY name", [.integer(serverID)]).map {
-            ServerDatabaseRecord(
-                id: $0["id"]!.asInt!, serverID: serverID, name: $0["name"]?.asString ?? "",
-                host: $0["host"]?.asString, port: $0["port"]?.asInt.map(Int.init),
-                username: $0["username"]?.asString, remote: $0["remote"]?.asString)
+        try db.query("SELECT * FROM server_databases WHERE server_id = ? ORDER BY name", [.integer(serverID)])
+            .map { databaseFromRow($0, serverID: serverID) }
+    }
+
+    public func database(id: Int64) throws -> ServerDatabaseRecord? {
+        try db.query("SELECT * FROM server_databases WHERE id = ?", [.integer(id)])
+            .first.map { databaseFromRow($0, serverID: $0["server_id"]?.asInt ?? 0) }
+    }
+
+    /// Records a database Macerodactyl actually provisioned (with the generated
+    /// user + password), marked `managed` so deleting it drops the real database.
+    @discardableResult
+    public func createManagedDatabase(
+        serverID: Int64, name: String, host: String, port: Int, username: String, password: String
+    ) throws -> Int64 {
+        try db.run(
+            """
+            INSERT INTO server_databases (server_id, name, host, port, username, password, managed)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
+            """,
+            [
+                .integer(serverID), .text(name), .text(host), .integer(Int64(port)),
+                .text(username), .text(password),
+            ])
+    }
+
+    // MARK: Managed-database engine (shared MariaDB)
+
+    public func databaseEngineConfig() throws -> DatabaseEngineConfig? {
+        try db.query("SELECT * FROM db_engine WHERE id = 1").first.map {
+            DatabaseEngineConfig(
+                rootPassword: $0["root_password"]?.asString ?? "", hostPort: Int($0["host_port"]?.asInt ?? 0),
+                image: $0["image"]?.asString ?? "")
         }
+    }
+
+    public func setDatabaseEngineConfig(_ config: DatabaseEngineConfig) throws {
+        try db.run(
+            """
+            INSERT INTO db_engine (id, root_password, host_port, image) VALUES (1, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET root_password=excluded.root_password,
+                host_port=excluded.host_port, image=excluded.image
+            """,
+            [.text(config.rootPassword), .integer(Int64(config.hostPort)), .text(config.image)])
     }
 
     @discardableResult

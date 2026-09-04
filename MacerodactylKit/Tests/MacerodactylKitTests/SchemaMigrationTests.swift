@@ -156,7 +156,28 @@ import Testing
             ContainerStats(
                 name: "x", cpuPercent: 0, memUsedBytes: 0, memLimitBytes: 0, memPercent: 0,
                 netRxBytes: 0, netTxBytes: 0, pids: 0, measuredAt: Date()))
-        #expect(PanelSchema.currentVersion == 14)
+        #expect(PanelSchema.currentVersion == 15)
+    }
+
+    @Test func migratesToV15AddingManagedDatabases() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try PanelDataStore(databasePath: dir.appending(path: "v15.sqlite").path)
+        let user = try store.createUser(username: "a", passwordHash: "h", isAdmin: true)
+        let sid = try store.createServerRecord(
+            uuid: "u", name: "srv", eggID: nil, dockerImage: "img", ownerUserID: user.id,
+            limits: .init(memoryMiB: 128), startup: "", values: [:])
+        // Engine config singleton round-trips.
+        #expect(try store.databaseEngineConfig() == nil)
+        try store.setDatabaseEngineConfig(.init(rootPassword: "rootpw", hostPort: 3306, image: "mariadb:11"))
+        #expect(try store.databaseEngineConfig()?.rootPassword == "rootpw")
+        // A managed database carries its password + managed flag.
+        let dbID = try store.createManagedDatabase(
+            serverID: sid, name: "s\(sid)_app", host: "host.docker.internal", port: 3306,
+            username: "u\(sid)_app", password: "secretpw")
+        let rec = try #require(try store.database(id: dbID))
+        #expect(rec.managed && rec.password == "secretpw" && rec.username == "u\(sid)_app")
+        #expect(try store.listDatabases(serverID: sid).first?.managed == true)
     }
 
     @Test func migratesToV14AddingScheduleTasks() throws {
