@@ -66,7 +66,22 @@ let scheduler = InProcessScheduler(store: store) { name, task in
         return ok ? .success("sent to console") : .failed("the server isn't running / has no console")
     case .backup:
         do {
-            _ = try await containers.createBackup(containerName: name)
+            // A scheduled backup must be RECORDED (the web route records what it
+            // creates; the tar alone is invisible + unmanageable), and a nil means
+            // there was no data dir to back up — a failure, not silent success.
+            guard let made = try await containers.createBackup(containerName: name) else {
+                return .failed("no data directory to back up")
+            }
+            _ = try store.recordBackup(
+                containerName: name, uuid: made.uuid, name: "scheduled", fileName: made.fileName,
+                bytes: made.bytes, checksum: nil)
+            // Rotate: keep the newest 20, prune older ones so scheduled backups
+            // don't grow without bound.
+            let all = (try? store.listBackups(containerName: name)) ?? []  // newest first
+            for old in all.dropFirst(20) {
+                try? await containers.deleteBackupFile(containerName: name, fileName: old.fileName)
+                try? store.deleteBackup(uuid: old.uuid)
+            }
             return .success("backed up \(name)")
         } catch {
             return .failed("backup failed: \(error)")
