@@ -830,11 +830,13 @@ function accKey(ed, k) {
 // --- schedules --------------------------------------------------------------
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 let selDays = new Set();
+let schedTasks = [];
 async function loadSchedule() {
   const host = document.getElementById('sched'); if (!host) return;
   let data;
   try { data = await jget(api('/schedule')); } catch (e) { host.replaceChildren(msg('Unavailable.', true)); return; }
   const s = data.schedule; selDays = new Set(s ? s.weekdays : []);
+  schedTasks = (s && s.tasks ? s.tasks : []).map(t => ({ action: t.action, payload: t.payload, offsetSeconds: t.offsetSeconds }));
   const nodes = [];
   if (s) {
     nodes.push(h('div', { class: 'kv' }, h('span', { class: 'kk', text: 'Current' }), h('span', { class: 'vv', text: s.description })));
@@ -852,14 +854,42 @@ async function loadSchedule() {
     b.onclick = () => { if (selDays.has(i)) { selDays.delete(i); b.classList.remove('on'); } else { selDays.add(i); b.classList.add('on'); } };
     return b;
   }));
+  const tasksHost = h('div', { id: 'schedtasks' });
   nodes.push(
     h('h2', { text: (s ? 'Change' : 'Add') + ' schedule' }),
     h('div', { class: 'field' }, 'At ', hSel, ' : ', mSel),
     daysEl,
-    h('div', { class: 'note', text: 'No days selected = every day. Runs via launchd even when the app is closed; restart only.' }),
+    h('div', { class: 'note', text: 'No days selected = every day.' }),
+    h('h2', { text: 'Tasks' }),
+    h('div', { class: 'note', text: 'When the schedule fires these run in order, each after its wait. With no tasks, the server is simply restarted.' }),
+    tasksHost,
     h('button', { class: 'primary', text: s ? 'Save changes' : 'Add schedule', onclick: () => saveSched(hSel, mSel) }));
   if (s) nodes.push(h('button', { class: 'danger', text: 'Remove schedule', onclick: delSched }));
   host.replaceChildren(...nodes);
+  drawSchedTasks();
+}
+function drawSchedTasks() {
+  const host = document.getElementById('schedtasks'); if (!host) return;
+  const rows = schedTasks.map((t, i) => {
+    const actionSel = h('select', {}, ...['power', 'command', 'backup'].map(a => h('option', { value: a, selected: a === t.action }, a[0].toUpperCase() + a.slice(1))));
+    actionSel.onchange = () => { t.action = actionSel.value; t.payload = t.action === 'power' ? 'restart' : ''; drawSchedTasks(); };
+    let payloadEl;
+    if (t.action === 'power') {
+      payloadEl = h('select', {}, ...['restart', 'start', 'stop'].map(p => h('option', { value: p, selected: p === (t.payload || 'restart') }, p)));
+      payloadEl.onchange = () => t.payload = payloadEl.value;
+    } else {
+      payloadEl = h('input', { type: 'text', value: t.payload || '', placeholder: t.action === 'command' ? 'console line (e.g. say restarting)' : 'backup name (optional)' });
+      payloadEl.addEventListener('input', () => t.payload = payloadEl.value);
+    }
+    const offEl = h('input', { type: 'number', min: '0', value: String(t.offsetSeconds || 0) });
+    offEl.addEventListener('input', () => t.offsetSeconds = Math.max(0, parseInt(offEl.value, 10) || 0));
+    return h('div', { class: 'taskrow' },
+      h('span', { class: 'seq', text: (i + 1) + '.' }), actionSel, payloadEl,
+      h('label', { class: 'wait' }, 'wait ', offEl, ' s'),
+      h('button', { class: 'btn ghost sm danger', type: 'button', onclick: () => { schedTasks.splice(i, 1); drawSchedTasks(); } }, '✕'));
+  });
+  host.replaceChildren(...rows,
+    h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { schedTasks.push({ action: 'power', payload: 'restart', offsetSeconds: 0 }); drawSchedTasks(); } }, 'Add task'));
 }
 function opts(n, sel) {
   const out = [];
@@ -867,7 +897,8 @@ function opts(n, sel) {
   return out;
 }
 async function saveSched(hSel, mSel) {
-  const r = await fetch(api('/schedule'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ hour: +hSel.value, minute: +mSel.value, weekdays: [...selDays] }) });
+  const body = { hour: +hSel.value, minute: +mSel.value, weekdays: [...selDays], tasks: schedTasks.map(t => ({ action: t.action, payload: t.payload || '', offsetSeconds: t.offsetSeconds || 0 })) };
+  const r = await fetch(api('/schedule'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify(body) });
   if (r.ok) loadSchedule(); else { const j = await r.json().catch(() => ({})); alert(j.error || 'Failed'); }
 }
 async function delSched() {

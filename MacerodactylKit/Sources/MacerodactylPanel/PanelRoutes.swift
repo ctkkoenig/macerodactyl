@@ -955,16 +955,31 @@ struct PanelRoutes {
         let weekdays: [Int]
         let description: String
         let lastRun: LastRun?
+        /// The ordered task chain (empty = the implicit single restart).
+        let tasks: [TaskDTO]
         struct LastRun: Encodable {
             let date: String
             let outcome: String
             let message: String
+        }
+        struct TaskDTO: Encodable {
+            let action: String
+            let payload: String
+            let offsetSeconds: Int
         }
     }
     struct ScheduleBody: Decodable {
         let hour: Int
         let minute: Int
         let weekdays: [Int]?
+        /// Optional ordered task chain. nil leaves tasks unchanged is NOT the
+        /// contract — the editor always sends the full list; nil clears it.
+        let tasks: [TaskInput]?
+        struct TaskInput: Decodable {
+            let action: String
+            let payload: String?
+            let offsetSeconds: Int?
+        }
     }
 
     @Sendable func apiScheduleGet(_ request: Request, context: PanelRequestContext) async throws -> Response {
@@ -973,10 +988,14 @@ struct PanelRoutes {
         guard let (schedule, last) = await containers.schedule(containerName: name) else {
             return encode(["schedule": Optional<ScheduleDTO>.none])
         }
+        let tasks = ((try? store.scheduleTasks(containerName: name)) ?? []).map {
+            ScheduleDTO.TaskDTO(action: $0.action.rawValue, payload: $0.payload, offsetSeconds: $0.offsetSeconds)
+        }
         let dto = ScheduleDTO(
             hour: schedule.hour, minute: schedule.minute, weekdays: schedule.weekdays.sorted(),
             description: schedule.timeDescription,
-            lastRun: last.map { .init(date: PanelSession.timestamp($0.date), outcome: outcomeString($0.outcome), message: $0.message) }
+            lastRun: last.map { .init(date: PanelSession.timestamp($0.date), outcome: outcomeString($0.outcome), message: $0.message) },
+            tasks: tasks
         )
         return encode(["schedule": dto])
     }
@@ -990,13 +1009,30 @@ struct PanelRoutes {
         else {
             return json(["error": "hour 0–23 and minute 0–59 required"], status: .badRequest)
         }
+        // Validate the task chain (if any) BEFORE writing the schedule, so a bad
+        // task never leaves a schedule with a half-applied chain.
+        var validatedTasks: [ScheduleTask] = []
+        for (index, input) in (body.tasks ?? []).enumerated() {
+            guard let action = ScheduleTask.Action(rawValue: input.action),
+                let task = ScheduleTask(
+                    seq: index, action: action, payload: input.payload ?? "",
+                    offsetSeconds: input.offsetSeconds ?? 0
+                ).validated()
+            else {
+                return json(["error": "task \(index + 1) is invalid (check its action, payload, and offset)"], status: .badRequest)
+            }
+            validatedTasks.append(task)
+        }
         do {
             try await containers.setSchedule(
                 containerName: name, hour: body.hour, minute: body.minute,
                 weekdays: Set(body.weekdays ?? []))
+            try store.setScheduleTasks(containerName: name, tasks: validatedTasks)
             audit(
                 user: user.username, action: "container.schedules", container: name, outcome: "ok",
-                ip: context.clientIP, detail: "set \(String(format: "%02d:%02d", body.hour, body.minute))")
+                ip: context.clientIP,
+                detail: "set \(String(format: "%02d:%02d", body.hour, body.minute))"
+                    + (validatedTasks.isEmpty ? "" : " with \(validatedTasks.count) task(s)"))
             return json(["ok": true])
         } catch {
             audit(

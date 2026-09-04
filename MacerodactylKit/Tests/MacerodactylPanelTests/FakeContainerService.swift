@@ -103,12 +103,22 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
     var dockerIsReachable = true
     func dockerReachable() async -> Bool { dockerIsReachable }
 
-    func schedule(containerName: String) async -> (RestartSchedule, ScheduleRunResult?)? { nil }
+    private var currentSchedules: [String: RestartSchedule] = [:]
+    func schedule(containerName: String) async -> (RestartSchedule, ScheduleRunResult?)? {
+        lock.withLock { currentSchedules[containerName] }.map { ($0, nil) }
+    }
     func setSchedule(containerName: String, hour: Int, minute: Int, weekdays: Set<Int>) async throws {
-        lock.withLock { scheduleCalls.append(("set", containerName)) }
+        lock.withLock {
+            scheduleCalls.append(("set", containerName))
+            currentSchedules[containerName] = RestartSchedule(
+                containerName: containerName, hour: hour, minute: minute, weekdays: weekdays)
+        }
     }
     func removeSchedule(containerName: String) async throws {
-        lock.withLock { scheduleCalls.append(("remove", containerName)) }
+        lock.withLock {
+            scheduleCalls.append(("remove", containerName))
+            currentSchedules[containerName] = nil
+        }
     }
 
     // Lifecycle — records the op and streams a couple of canned progress lines.

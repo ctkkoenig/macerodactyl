@@ -265,6 +265,43 @@ import Testing
         #expect(harness.service.scheduleCalls.contains { $0.op == "remove" && $0.name == "bot" })
     }
 
+    @Test func scheduleTaskChainRoundTripsAndValidates() async throws {
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, schedules: true))
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            // Set a schedule with a 3-task chain.
+            let body = #"""
+                {"hour":4,"minute":0,"weekdays":[],"tasks":[
+                  {"action":"command","payload":"say restarting","offsetSeconds":0},
+                  {"action":"backup","payload":"","offsetSeconds":60},
+                  {"action":"power","payload":"restart","offsetSeconds":5}]}
+                """#
+            try await client.execute(
+                uri: "/api/containers/bot/schedule", method: .post,
+                headers: headers(token, csrf: true, json: true), body: ByteBuffer(string: body)
+            ) { #expect($0.status == .ok) }
+            // GET returns the chain in order.
+            try await client.execute(uri: "/api/containers/bot/schedule", method: .get, headers: headers(token)) { response in
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                let sched = json["schedule"] as! [String: Any]
+                let tasks = sched["tasks"] as! [[String: Any]]
+                #expect(tasks.map { $0["action"] as! String } == ["command", "backup", "power"])
+                #expect(tasks[1]["offsetSeconds"] as? Int == 60)
+            }
+            // Persisted in the store too.
+            #expect(try harness.store.scheduleTasks(containerName: "bot").count == 3)
+
+            // An invalid task (bad power payload) is rejected AND doesn't clobber
+            // the existing chain.
+            try await client.execute(
+                uri: "/api/containers/bot/schedule", method: .post,
+                headers: headers(token, csrf: true, json: true),
+                body: ByteBuffer(string: #"{"hour":4,"minute":0,"weekdays":[],"tasks":[{"action":"power","payload":"explode"}]}"#)
+            ) { #expect($0.status == .badRequest) }
+            #expect(try harness.store.scheduleTasks(containerName: "bot").count == 3)  // unchanged
+        }
+    }
+
     @Test func filesRequireFilesPermission() async throws {
         let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
         try await harness.app.test(.router) { client in
