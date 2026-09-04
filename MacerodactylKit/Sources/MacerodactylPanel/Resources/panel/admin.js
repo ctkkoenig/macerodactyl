@@ -440,24 +440,33 @@ async function renderEditServer(name) {
   show(pageHeader('Edit server', d.name), card(null, form));
 }
 
-// Databases (per server)
+// Databases (per server) — real provisioning on the shared MariaDB.
 async function renderDatabases() {
   const servers = await jget('/api/admin/servers');
   const sel = select('server', [{ value: '', label: '— choose a server —' }, ...servers.map(s => ({ value: s.name, label: s.name }))], '');
   const listBox = h('div');
+  const note = h('div');
   const load = async name => {
-    if (!name) { listBox.replaceChildren(); return; }
+    if (!name) { listBox.replaceChildren(); note.replaceChildren(); return; }
     const dbs = await jget('/api/admin/servers/' + enc(name) + '/databases');
-    const rows = dbs.map(d => h('tr', null, h('td', { text: d.name }), h('td', { class: 'mono', text: (d.host || '') + (d.port ? ':' + d.port : '') }), h('td', { text: d.username || '—' }),
-      h('td', null, h('div', { class: 'rowact' }, h('button', { class: 'btn ghost sm danger', onclick: async () => { try { await jsend('DELETE', '/api/admin/databases/' + d.id); load(name); } catch (e) { alert(e); } } }, 'Delete')))));
-    const form = h('form', { class: 'form-row', onsubmit: async e => { e.preventDefault(); try { await jsend('POST', '/api/admin/servers/' + enc(name) + '/databases', { name: val(form, 'dbname'), host: val(form, 'host') || null, port: val(form, 'port') ? num(form, 'port') : null, username: val(form, 'user') || null }); load(name); } catch (err) { alert(err); } } },
-      field('Database name', input('dbname')), field('Host', input('host')), field('Port', input('port', { type: 'number' })), field('Username', input('user')),
-      h('div', { class: 'field', style: 'flex:0 0 auto;justify-content:flex-end' }, h('button', { class: 'btn', type: 'submit' }, 'Add')));
-    listBox.replaceChildren(tableCard('Databases · ' + name, ['Name', 'Host', 'User', ''], rows), card('Add database', form));
+    const rows = dbs.map(d => h('tr', null,
+      h('td', { class: 'mono', text: d.name }),
+      h('td', { class: 'mono', text: (d.host || '') + (d.port ? ':' + d.port : '') }),
+      h('td', { class: 'mono', text: d.username || '—' }),
+      h('td', { class: 'mono', text: d.password || '—' }),
+      h('td', null, h('div', { class: 'rowact' }, h('button', { class: 'btn ghost sm danger', onclick: async () => { if (!confirm('Delete database ' + d.name + '? This DROPs it and its user.')) return; try { await jsend('DELETE', '/api/admin/databases/' + d.id); load(name); } catch (e) { alert(e); } } }, 'Delete')))));
+    const form = h('form', { class: 'form-row', onsubmit: async e => {
+      e.preventDefault();
+      note.replaceChildren(msg('Provisioning… the shared database engine may need to start (first use pulls MariaDB).', ''));
+      try { const r = await jsend('POST', '/api/admin/servers/' + enc(name) + '/databases', { name: val(form, 'dbname') }); note.replaceChildren(msg('Created "' + r.name + '". The password is shown in the table — copy it now.', 'ok')); load(name); }
+      catch (err) { note.replaceChildren(msg(String(err), 'err')); } } },
+      field('Database name', input('dbname'), 'Letters/digits; a scoped name, user, and password are generated.'),
+      h('div', { class: 'field', style: 'flex:0 0 auto;justify-content:flex-end' }, h('button', { class: 'btn', type: 'submit' }, 'Create database')));
+    listBox.replaceChildren(tableCard('Databases · ' + name, ['Name', 'Host', 'User', 'Password', ''], rows), card('Create database', note, form));
   };
   sel.addEventListener('change', () => load(sel.value));
-  show(pageHeader('Databases', 'Connection bookkeeping for each server'),
-    msg('These are records only — Macerodactyl does not create the database or credentials yet. Use them to note an existing database’s connection details for a server. Real provisioning is planned.', ''),
+  show(pageHeader('Databases', 'Provision MySQL databases on the shared engine'),
+    msg('Each database gets its own scoped user + password on a shared MariaDB container (started automatically on first use). Servers connect at the host/port shown; deleting a database DROPs it.', ''),
     card('Server', field('Server', sel)), listBox);
 }
 
