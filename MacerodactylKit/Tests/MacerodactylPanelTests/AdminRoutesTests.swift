@@ -373,6 +373,68 @@ import Testing
         }
     }
 
+    @Test func managedDatabaseProvisionAndDrop() async throws {
+        let h = try await makeHarness()
+        try await h.app.test(.router) { client in
+            let token = try await login(client, "admin", h.adminPassword)
+            let scoped = try #require(try h.store.user(named: "scoped"))
+            let eggId = try await importEgg(client, token: token, nestName: "MC", json: sampleEgg)
+            try await generateAllocations(client, token: token, start: 25565, end: 25566)
+            let create = ByteBuffer(string: #"{"name":"mc1","eggId":\#(eggId),"ownerUserId":\#(scoped.id),"memoryMiB":512}"#)
+            try await client.execute(uri: "/api/admin/servers", method: .post, headers: authed(token), body: create) { _ in }
+            let sid = try #require(try h.store.serverRecord(name: "mc1")).id
+
+            // Create a database named "Stats".
+            try await client.execute(
+                uri: "/api/admin/servers/mc1/databases", method: .post, headers: authed(token),
+                body: ByteBuffer(string: #"{"name":"Stats"}"#)
+            ) { response in
+                #expect(response.status == .ok)
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                #expect(json["managed"] as? Bool == true)
+                #expect(json["name"] as? String == "s\(sid)_stats")
+                #expect(json["username"] as? String == "u\(sid)_stats")
+                #expect((json["password"] as? String)?.count == 24)  // creds surfaced once
+                #expect(json["host"] as? String == "host.docker.internal")
+            }
+            // The engine actually received a safe CREATE statement.
+            let createSQL = try #require(h.service.databaseSQL.first)
+            #expect(createSQL.contains("CREATE DATABASE IF NOT EXISTS `s\(sid)_stats`;"))
+            #expect(createSQL.contains("GRANT ALL PRIVILEGES ON `s\(sid)_stats`.* TO 'u\(sid)_stats'@'%';"))
+            // An engine config with a root password was created on first use.
+            #expect(try h.store.databaseEngineConfig()?.rootPassword.isEmpty == false)
+
+            // It lists, then delete drops it on the engine and removes the record.
+            let dbID = try #require(try h.store.listDatabases(serverID: sid).first).id
+            try await client.execute(uri: "/api/admin/databases/\(dbID)", method: .delete, headers: authed(token)) {
+                #expect($0.status == .ok)
+            }
+            #expect(h.service.databaseSQL.contains { $0.contains("DROP DATABASE IF EXISTS `s\(sid)_stats`;") })
+            #expect(try h.store.listDatabases(serverID: sid).isEmpty)
+        }
+    }
+
+    @Test func managedDatabaseCreateFailsCleanlyWhenEngineUnavailable() async throws {
+        let h = try await makeHarness()
+        h.service.databaseSQLShouldFail = true
+        try await h.app.test(.router) { client in
+            let token = try await login(client, "admin", h.adminPassword)
+            let eggId = try await importEgg(client, token: token, nestName: "MC", json: sampleEgg)
+            try await generateAllocations(client, token: token, start: 25565, end: 25566)
+            try await client.execute(
+                uri: "/api/admin/servers", method: .post, headers: authed(token),
+                body: ByteBuffer(string: #"{"name":"mc1","eggId":\#(eggId),"memoryMiB":512}"#)
+            ) { _ in }
+            let sid = try #require(try h.store.serverRecord(name: "mc1")).id
+            try await client.execute(
+                uri: "/api/admin/servers/mc1/databases", method: .post, headers: authed(token),
+                body: ByteBuffer(string: #"{"name":"stats"}"#)
+            ) { #expect($0.status == .internalServerError) }
+            // No record was stored when provisioning failed.
+            #expect(try h.store.listDatabases(serverID: sid).isEmpty)
+        }
+    }
+
     @Test func eggEditPatchesFieldsInPlace() async throws {
         let h = try await makeHarness()
         try await h.app.test(.router) { client in

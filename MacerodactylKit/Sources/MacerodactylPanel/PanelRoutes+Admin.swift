@@ -486,22 +486,68 @@ extension PanelRoutes {
         return encode(try store.listDatabases(serverID: server.id).map(DatabaseDTO.init))
     }
 
+    /// The shared managed-database engine's config, creating it (a fresh root
+    /// password + the default port/image) the first time a database is made.
+    private func databaseEngine() throws -> DatabaseEngineConfig {
+        if let existing = try store.databaseEngineConfig() { return existing }
+        let config = DatabaseEngineConfig(
+            rootPassword: DatabaseProvisioning.generatePassword(), hostPort: 3306,
+            image: ManagedDatabaseService.defaultImage)
+        try store.setDatabaseEngineConfig(config)
+        return config
+    }
+
+    /// Provisions a REAL database + scoped user on the shared MariaDB (starting it
+    /// on first use), then records it. The connection details, incl. the one-time
+    /// password, come back in the response.
     @Sendable func apiAdminDatabaseCreate(_ request: Request, context: PanelRequestContext) async throws -> Response {
         let user = try context.requireIdentity()
         let name = try context.parameters.require("name")
         guard let server = try store.serverRecord(name: name) else { throw notFound() }
         guard let body = try? await request.decode(as: CreateDatabaseBody.self, context: context), !body.name.isEmpty
         else { return json(["error": "a database name is required"], status: .badRequest) }
-        let id = try store.createDatabase(
-            serverID: server.id, name: body.name, host: body.host, port: body.port, username: body.username)
+        guard let dbName = DatabaseProvisioning.databaseName(serverID: server.id, base: body.name),
+            let username = DatabaseProvisioning.username(serverID: server.id, base: body.name)
+        else { return json(["error": "the name must contain letters or digits"], status: .badRequest) }
+        let password = DatabaseProvisioning.generatePassword()
+        guard let sql = DatabaseProvisioning.createSQL(database: dbName, username: username, password: password) else {
+            return json(["error": "could not build a safe provisioning statement"], status: .internalServerError)
+        }
+        let engine = try databaseEngine()
+        do {
+            try await containers.executeDatabaseSQL(sql, engine: engine)
+        } catch {
+            audit(
+                user: user.username, action: "admin.database.create", container: name, outcome: "error",
+                ip: context.clientIP, detail: "\(error)")
+            return json(["error": "could not provision the database — is docker available? (\(error))"], status: .internalServerError)
+        }
+        let id = try store.createManagedDatabase(
+            serverID: server.id, name: dbName, host: "host.docker.internal", port: engine.hostPort,
+            username: username, password: password)
         audit(
-            user: user.username, action: "admin.database.create", container: name, outcome: "ok", ip: context.clientIP)
-        return json(["id": Int(id)])
+            user: user.username, action: "admin.database.create", container: name, outcome: "ok",
+            ip: context.clientIP, detail: dbName)
+        guard let record = try store.database(id: id) else { throw notFound() }
+        return encode(DatabaseDTO(record))
     }
 
     @Sendable func apiAdminDatabaseDelete(_ request: Request, context: PanelRequestContext) async throws -> Response {
         let user = try context.requireIdentity()
-        try store.deleteDatabase(id: try requireInt(context, "id"))
+        let id = try requireInt(context, "id")
+        // Drop the real database + user first (only for managed records), so we
+        // never orphan a database on the engine after removing our record.
+        if let record = try store.database(id: id), record.managed, let username = record.username,
+            let sql = DatabaseProvisioning.dropSQL(database: record.name, username: username),
+            let engine = try store.databaseEngineConfig()
+        {
+            do {
+                try await containers.executeDatabaseSQL(sql, engine: engine)
+            } catch {
+                return json(["error": "could not drop the database on the engine (\(error))"], status: .internalServerError)
+            }
+        }
+        try store.deleteDatabase(id: id)
         audit(user: user.username, action: "admin.database.delete", outcome: "ok", ip: context.clientIP)
         return json(["ok": true])
     }

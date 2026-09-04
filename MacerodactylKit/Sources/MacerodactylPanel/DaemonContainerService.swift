@@ -109,6 +109,12 @@ public struct DaemonContainerService: ContainerService {
         return await cli.startedAt(containerID: container.id)
     }
 
+    public func executeDatabaseSQL(_ sql: String, engine: DatabaseEngineConfig) async throws {
+        let service = ManagedDatabaseService(cli: cli)
+        try await service.ensureRunning(config: engine)
+        try await service.runSQL(config: engine, sql: sql)
+    }
+
     public func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>? {
         guard let container = await container(named: containerName), container.isRunning else { return nil }
         return cli.statsStream(containerID: container.id)

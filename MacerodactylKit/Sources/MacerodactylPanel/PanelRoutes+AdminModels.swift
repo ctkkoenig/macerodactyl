@@ -259,12 +259,16 @@ struct DatabaseDTO: Encodable {
     let host: String?
     let port: Int?
     let username: String?
+    let password: String?
+    let managed: Bool
     init(_ d: ServerDatabaseRecord) {
         id = d.id
         name = d.name
         host = d.host
         port = d.port
         username = d.username
+        password = d.password
+        managed = d.managed
     }
 }
 

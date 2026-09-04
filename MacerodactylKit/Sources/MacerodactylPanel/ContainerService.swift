@@ -38,6 +38,11 @@ public protocol ContainerService: Sendable {
     /// When a container started (for a truthful uptime / startup-state probe),
     /// or nil if unavailable.
     func startedAt(containerName: String) async -> Date?
+    /// Ensures the shared managed-database engine is running and executes admin
+    /// SQL against it (create/drop database + user). Throws if databases aren't
+    /// available here (no docker access). The SQL is built by the caller from
+    /// `DatabaseProvisioning`'s allow-list — never from raw user input.
+    func executeDatabaseSQL(_ sql: String, engine: DatabaseEngineConfig) async throws
     /// Live stats stream for one container (for the focused view).
     func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>?
     /// The current schedule for a container, if any, plus its last run.
@@ -211,6 +216,15 @@ public struct LiveContainerService: ContainerService {
             let cli = await MainActor.run(body: { store.cli })
         else { return nil }
         return await cli.startedAt(containerID: container.id)
+    }
+
+    public func executeDatabaseSQL(_ sql: String, engine: DatabaseEngineConfig) async throws {
+        guard let cli = await MainActor.run(body: { store.cli }) else {
+            throw ContainerServiceError.notFound
+        }
+        let service = ManagedDatabaseService(cli: cli)
+        try await service.ensureRunning(config: engine)
+        try await service.runSQL(config: engine, sql: sql)
     }
 
     public func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>? {

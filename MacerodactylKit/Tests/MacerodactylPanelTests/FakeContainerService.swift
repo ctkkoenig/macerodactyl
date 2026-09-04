@@ -77,6 +77,12 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
     func exitInfo(containerName: String) async -> ContainerExitInfo? { cannedExitInfo[containerName] }
     var cannedStartedAt: [String: Date] = [:]
     func startedAt(containerName: String) async -> Date? { cannedStartedAt[containerName] }
+    private(set) var databaseSQL: [String] = []
+    var databaseSQLShouldFail = false
+    func executeDatabaseSQL(_ sql: String, engine: DatabaseEngineConfig) async throws {
+        if databaseSQLShouldFail { throw ContainerServiceError.notFound }
+        lock.withLock { databaseSQL.append(sql) }
+    }
 
     func statsSnapshot() async -> [String: ContainerStats] {
         var out: [String: ContainerStats] = [:]

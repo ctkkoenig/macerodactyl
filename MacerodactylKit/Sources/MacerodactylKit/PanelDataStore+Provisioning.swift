@@ -100,13 +100,13 @@ public struct ServerDatabaseRecord: Sendable, Equatable, Identifiable {
     public let id: Int64
     public var serverID: Int64
     public var name: String
-    public var host: String?
-    public var port: Int?
-    public var username: String?
-    public var remote: String?
+    public var host: String? = nil
+    public var port: Int? = nil
+    public var username: String? = nil
+    public var remote: String? = nil
     /// The scoped user's password — present only for a database Macerodactyl
     /// actually provisioned (`managed`). Shown once in the connection details.
-    public var password: String?
+    public var password: String? = nil
     /// True when Macerodactyl created the real database + user (so deleting it
     /// drops them); false for a legacy bookkeeping-only record.
     public var managed: Bool = false
