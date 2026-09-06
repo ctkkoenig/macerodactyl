@@ -109,3 +109,37 @@ import Testing
         #expect(groups.all.map(\.name) == ["keeper"])
     }
 }
+
+@Suite struct UptimeParsingTests {
+    @Test func hoursAndMinutes() {
+        #expect(DockerPSParser.parseUptime(fromStatus: "Up 13 hours") == "13h")
+        #expect(DockerPSParser.parseUptime(fromStatus: "Up 19 minutes (healthy)") == "19m")
+    }
+
+    @Test func daysAndWeeks() {
+        #expect(DockerPSParser.parseUptime(fromStatus: "Up 3 days") == "3d")
+        #expect(DockerPSParser.parseUptime(fromStatus: "Up 2 weeks (unhealthy)") == "2w")
+    }
+
+    /// Docker words these rather than giving a number.
+    @Test func wordedDurations() {
+        #expect(DockerPSParser.parseUptime(fromStatus: "Up About a minute") == "1m")
+        #expect(DockerPSParser.parseUptime(fromStatus: "Up About an hour") == "1h")
+        #expect(DockerPSParser.parseUptime(fromStatus: "Up Less than a second") == "0s")
+    }
+
+    /// The one that matters: "Exited (0) 2 hours ago" contains a duration, but
+    /// it is how long the container has been DOWN. Reporting it as uptime would
+    /// be actively misleading.
+    @Test func stoppedContainersHaveNoUptime() {
+        #expect(DockerPSParser.parseUptime(fromStatus: "Exited (0) 2 hours ago") == nil)
+        #expect(DockerPSParser.parseUptime(fromStatus: "Exited (1) 2 hours ago") == nil)
+        #expect(DockerPSParser.parseUptime(fromStatus: "Restarting (1) 5 seconds ago") == nil)
+        #expect(DockerPSParser.parseUptime(fromStatus: "Created") == nil)
+    }
+
+    /// Health lives in the same string and must not be mistaken for a duration.
+    @Test func healthSuffixDoesNotConfuseIt() {
+        #expect(DockerPSParser.parseUptime(fromStatus: "Up 5 seconds (health: starting)") == "5s")
+    }
+}

@@ -184,7 +184,10 @@ function serverRow(c) {
     addr ? h('span', { class: 'addr' }, h('span', { class: 'ai', text: '🔗' }), addr) : h('span', { class: 'addr' }),
     h('span', { class: 'sgroups' },
       statGroup(c.name, 'cpu', '◔', c.running ? '…' : '—', cpuLim),
-      statGroup(c.name, 'mem', '▤', c.running ? '…' : '—', memLim)),
+      statGroup(c.name, 'mem', '▤', c.running ? '…' : '—', memLim),
+      // Uptime comes from the container list itself, so unlike cpu/mem it is
+      // already correct on first paint and is never replaced by the stats poll.
+      statGroup(c.name, 'uptime', '⏱', c.uptime || '—', c.running ? 'uptime' : 'stopped')),
     h('span', { class: 'edge' }));
 }
 function statGroup(name, kind, icon, value, limit) {
@@ -217,6 +220,10 @@ async function pollStats() {
   const map = {}; stats.forEach(s => map[s.name] = s);
   document.querySelectorAll('.v[data-c][data-stat]').forEach(el => {
     const name = el.getAttribute('data-c'), kind = el.getAttribute('data-stat'), s = map[name];
+    // Uptime is not a live stat — it comes from the container list and is
+    // already right. Letting it fall through would blank it to an em dash for
+    // any container missing from `docker stats`, which is every stopped one.
+    if (kind === 'uptime') return;
     const lim = rowLimits[name] || {};
     let hot = false;
     if (!s) { el.textContent = '—'; }
@@ -279,7 +286,10 @@ function statCards() {
     card('cpu', '◔', 'CPU', s ? s.cpuPercent.toFixed(1) + '%' : null, d.cpuCores != null ? cores(d.cpuCores) : 'Unlimited', cpuHot),
     card('mem', '▤', 'Memory', s ? bytes(s.memUsedBytes) : null, d.memoryLimitBytes ? bytes(d.memoryLimitBytes) : 'Unlimited', memHot),
     card('net', '⇅', 'Network', s ? ('↓ ' + bytes(s.netRxBytes) + '   ↑ ' + bytes(s.netTxBytes)) : null, null),
-    card('pids', '◈', 'Processes', s ? String(s.pids) : null, null));
+    card('pids', '◈', 'Processes', s ? String(s.pids) : null, null),
+    // Not from `docker stats` — it rides on the container detail, so it stays
+    // correct while the container is up and reads "Stopped" the moment it is not.
+    card('uptime', '⏱', 'Uptime', d.uptime || null, d.running ? null : 'Stopped'));
 }
 
 function wsHead() {

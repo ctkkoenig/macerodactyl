@@ -370,6 +370,10 @@ struct PanelRoutes {
         let running: Bool
         let health: String?
         let stack: String?
+        /// Compacted from the status string ("3d", "24h"); null when not up.
+        /// Derived server-side so the native and web panels agree on the rule
+        /// for what counts as uptime rather than each parsing the string.
+        let uptime: String?
         /// Configured limits — null means Unlimited (the UI shows that verbatim,
         /// never a fabricated ceiling).
         let memoryLimitBytes: Int64?
@@ -387,6 +391,7 @@ struct PanelRoutes {
                 name: container.name, image: container.image, status: container.status,
                 state: container.state.rawValue, ports: container.ports, running: container.isRunning,
                 health: container.health?.rawValue, stack: container.composeProject,
+                uptime: DockerPSParser.parseUptime(fromStatus: container.status),
                 memoryLimitBytes: limits[container.name]?.memoryBytes, cpuCores: limits[container.name]?.cpuCores
             )
         }
@@ -398,6 +403,7 @@ struct PanelRoutes {
         let running: Bool
         let health: String?
         let stack: String?
+        let uptime: String?
         let permissions: Permissions
         let filesAvailable: Bool
         let memoryLimitBytes: Int64?
@@ -418,6 +424,7 @@ struct PanelRoutes {
                 name: container.name, image: container.image, status: container.status,
                 state: container.state.rawValue, ports: container.ports, running: container.isRunning,
                 health: container.health?.rawValue, stack: container.composeProject,
+                uptime: DockerPSParser.parseUptime(fromStatus: container.status),
                 permissions: .init(
                     view: engine.can(.view, containerNamed: name), power: engine.can(.power, containerNamed: name),
                     files: engine.can(.files, containerNamed: name), console: engine.can(.console, containerNamed: name),

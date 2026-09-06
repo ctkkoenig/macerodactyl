@@ -2,10 +2,32 @@
    look (a control panel is expected dark), so no light variant here. */
 :root {
   color-scheme: dark;
-  --bg:#0b0d11; --card:#15181e; --tile:#20242c; --tile2:#2a2f39; --line:#23272f;
-  --fg:#e7eaee; --fg2:#c3c8d0; --muted:#868d99; --accent:#3b82f6; --accent-dim:#1d3a6b;
-  --green:#2fbf57; --red:#ef4444; --amber:#f59e0b; --violet:#a371f7; --teal:#2bb6a3;
-  --termbg:#0c1016; --termfg:#e7eaee;
+  /* Chrome. --bg is the page; --chrome is the header and sidebar, which sit
+     darker than the content they frame; --card is a raised surface on --bg;
+     --tile is the recessed well inside a card (stat-card icon, command input). */
+  --bg:#262626; --chrome:#17171B; --card:#212121; --tile:#171717; --tile2:#2e2e2e;
+  --line:#333333; --scroll:#444444;
+
+  /* Text, brightest to dimmest. --muted is the "/ 8 GiB" fraction. */
+  --fg:#fafafa; --fg2:#e5e5e5; --muted:#929292; --glyph:#f5f5f5;
+
+  /* Sidebar. The active tile is the one strong red in the chrome. */
+  --nav-active:#c72510; --nav-active-fg:#ffffff; --nav-glyph:#9e9e9e; --nav-label:#ffffff;
+
+  /* Power buttons carry meaning by colour, so they are named by action. */
+  --btn-start:#3469c0; --btn-restart:#737373; --btn-stop:#dc2626; --btn-fg:#fafafa;
+
+  /* Material Palenight. Also the console's syntax colours, so status colour and
+     log colour cannot drift apart. */
+  --green:#c3e88d; --amber:#ffcb6b; --red:#ff5370; --accent:#82aaff;
+  --cyan:#89ddff; --violet:#c792ea; --teal:#89ddff; --accent-dim:#2a3a55;
+
+  /* Console. --termdim is the timestamp/INFO prefix. */
+  --termbg:#131a20; --termfg:#e6e7e7; --termdim:#696e71;
+
+  /* Charts. Fills are the line at ~30% over --bg, precomputed so the SVG needs
+     no colour-mix support. */
+  --cpu-line:#22d3ee; --cpu-fill:#1a4d5b; --net-line:#f87171; --net-fill:#702121;
 }
 * { box-sizing:border-box; }
 body { margin:0; font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; background:var(--bg); color:var(--fg); -webkit-text-size-adjust:100%; }
@@ -14,7 +36,7 @@ button { font:inherit; color:inherit; }
 
 /* top bar: wordmark left, icon actions right */
 .top { position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:8px; height:54px;
-  padding:0 calc(14px + env(safe-area-inset-right)) 0 calc(14px + env(safe-area-inset-left)); background:var(--card); border-bottom:1px solid var(--line); }
+  padding:0 calc(14px + env(safe-area-inset-right)) 0 calc(14px + env(safe-area-inset-left)); background:var(--chrome); border-bottom:1px solid var(--line); }
 .top .title { flex:1; font-weight:700; font-size:16px; letter-spacing:.2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .top .title .brand { color:var(--accent); }
 .icon { width:38px; height:38px; border:0; background:none; color:var(--muted); font-size:19px; border-radius:9px; }
@@ -29,17 +51,17 @@ h2.section { font-size:12px; letter-spacing:.6px; text-transform:uppercase; colo
 .serverlist { display:flex; flex-direction:column; gap:12px; }
 .server { position:relative; display:flex; align-items:center; gap:16px; width:100%; text-align:left;
   background:var(--card); border:1px solid var(--line); border-radius:14px; padding:15px 22px 15px 16px; color:var(--fg); }
-.server:hover { border-color:#30363f; }
+.server:hover { border-color:var(--scroll); }
 .server .avatar { flex:0 0 auto; width:42px; height:42px; border-radius:50%; background:var(--tile); display:flex; align-items:center; justify-content:center; font-size:20px; }
 .server .ident { flex:1 1 auto; min-width:0; }
-.server .ident .nm { font-size:16px; font-weight:600; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.server .ident .nm { font-size:16px; font-weight:600; color:var(--fg); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .server .ident .desc { font-size:13px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .server .addr { flex:0 0 auto; display:flex; align-items:center; gap:6px; font-size:13px; color:var(--fg2); font-variant-numeric:tabular-nums; }
 .server .addr .ai { color:var(--muted); font-size:13px; }
 .server .sgroups { flex:0 0 auto; display:flex; gap:22px; }
 .sg { display:flex; align-items:center; gap:9px; min-width:92px; }
 .sg .ic { width:30px; height:30px; border-radius:8px; background:var(--tile); display:flex; align-items:center; justify-content:center; font-size:15px; color:var(--fg2); flex:0 0 auto; }
-.sg.hot .ic { color:var(--red); background:#3a1d1f; }
+.sg.hot .ic { color:var(--red); background:color-mix(in srgb, var(--red) 22%, var(--card)); }
 .sg .v { font-size:16px; font-weight:600; font-variant-numeric:tabular-nums; line-height:1.15; }
 .sg .lim { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
 .server .edge { position:absolute; right:0; top:10px; bottom:10px; width:4px; border-radius:4px 0 0 4px; background:var(--muted); }
@@ -54,50 +76,57 @@ h2.section { font-size:12px; letter-spacing:.6px; text-transform:uppercase; colo
    This guard restores the attribute's meaning for every element that uses it. */
 [hidden] { display: none !important; }
 
-.tabbar { z-index:20; background:var(--card); }
-.tabbar .navitem { display:flex; align-items:center; border:0; background:none; color:var(--muted); }
-.tabbar .navitem .tile { display:flex; align-items:center; justify-content:center; border-radius:10px; background:var(--tile); flex:0 0 auto; }
-.tabbar .navitem.sel { color:#fff; }
-.tabbar .navitem.sel .tile { background:var(--accent); color:#fff; }
+.tabbar { z-index:20; background:var(--chrome); }
+.tabbar .navitem { display:flex; align-items:center; border:0; background:none; color:var(--nav-label); }
+.tabbar .navitem .tile { display:flex; align-items:center; justify-content:center; border-radius:10px; background:var(--card); color:var(--nav-glyph); flex:0 0 auto; }
+.tabbar .navitem.sel { color:var(--nav-label); }
+.tabbar .navitem.sel .tile { background:var(--nav-active); color:var(--nav-active-fg); }
 
 .wshead { display:flex; align-items:flex-start; gap:14px; margin-bottom:16px; flex-wrap:wrap; }
 .wshead .h { flex:1 1 auto; min-width:0; }
-.wshead h1 { font-size:20px; font-weight:700; margin:0; color:#fff; overflow:hidden; text-overflow:ellipsis; }
+.wshead h1 { font-size:20px; font-weight:700; margin:0; color:var(--fg); overflow:hidden; text-overflow:ellipsis; }
 .wshead .desc { font-size:13px; color:var(--muted); margin-top:2px; }
 .power { display:flex; gap:8px; flex-wrap:wrap; }
 .power button { min-height:38px; padding:0 16px; border:0; border-radius:9px; font-weight:600; font-size:14px; background:var(--tile); color:var(--fg); }
-.power .start { background:#1c3a24; color:var(--green); } .power .start:not(:disabled):hover { background:#224a2b; }
-.power .restart { background:var(--tile); }
-.power .stop { background:var(--red); color:#fff; } .power .kill { background:none; border:1px solid var(--red); color:var(--red); }
+.power .start { background:var(--btn-start); color:var(--btn-fg); } .power .start:not(:disabled):hover { filter:brightness(1.12); }
+.power .restart { background:var(--btn-restart); color:var(--btn-fg); }
+.power .stop { background:var(--btn-stop); color:var(--btn-fg); } .power .kill { background:none; border:1px solid var(--btn-stop); color:var(--btn-stop); }
 .power button:disabled { opacity:.4; }
 .life { display:flex; gap:8px; margin:0 0 14px; flex-wrap:wrap; }
 .life button { min-height:36px; padding:0 14px; border:1px solid var(--line); border-radius:9px; font-weight:600; font-size:13px; background:var(--tile); color:var(--fg); }
-.life .rm { color:#fff; background:var(--red); border-color:var(--red); }
+.life .rm { color:var(--btn-fg); background:var(--btn-stop); border-color:var(--btn-stop); }
 
 /* console layout: terminal + stat column */
 .consolelayout { display:grid; grid-template-columns:1fr; gap:16px; }
 .statcol { display:flex; flex-direction:column; gap:10px; }
 .statcard { display:flex; align-items:center; gap:12px; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
-.statcard .ic { width:38px; height:38px; border-radius:10px; background:var(--tile); display:flex; align-items:center; justify-content:center; font-size:17px; flex:0 0 auto; color:var(--fg2); }
-.statcard.cpu .ic { color:#7cb0ff; } .statcard.mem .ic { color:var(--violet); } .statcard.net .ic { color:var(--teal); } .statcard.pids .ic { color:var(--green); }
-.statcard.hot .ic { color:var(--red); background:#3a1d1f; }
+.statcard .ic { width:38px; height:38px; border-radius:10px; background:var(--tile); display:flex; align-items:center; justify-content:center; font-size:17px; flex:0 0 auto; color:var(--glyph); }
+.statcard.cpu .ic { color:var(--cpu-line); } .statcard.mem .ic { color:var(--violet); } .statcard.net .ic { color:var(--net-line); } .statcard.pids .ic { color:var(--green); } .statcard.uptime .ic { color:var(--cyan); }
+.statcard.hot .ic { color:var(--red); background:color-mix(in srgb, var(--red) 22%, var(--tile)); }
 .statcard .body { min-width:0; }
-.statcard .k { font-size:12px; color:var(--muted); }
+.statcard .k { font-size:12px; color:var(--fg2); }
 .statcard .v { font-size:19px; font-weight:600; font-variant-numeric:tabular-nums; }
 .statcard .v .lim { font-size:13px; font-weight:500; color:var(--muted); }
 .statcard.na .v { color:var(--muted); font-size:15px; }
 
 /* sparkline */
 .spark { width:100%; height:46px; display:block; }
-.spark .fill { fill:color-mix(in srgb, var(--accent) 20%, transparent); }
-.spark .line { fill:none; stroke:var(--accent); stroke-width:1.5; }
+.spark .fill { fill:var(--cpu-fill); }
+.spark .line { fill:none; stroke:var(--cpu-line); stroke-width:1.5; }
+/* Network reads as the counterpart to CPU, so it gets the warm pair. */
+.spark.net .fill { fill:var(--net-fill); }
+.spark.net .line { stroke:var(--net-line); }
 .sparkwrap { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin-bottom:14px; }
 .sparkwrap .lbl { font-size:12px; color:var(--muted); margin-bottom:2px; }
 
 /* terminal / logs */
 .term { background:var(--termbg); color:var(--termfg); border:1px solid var(--line); border-radius:12px; padding:13px;
   height:48vh; min-height:280px; overflow:auto; font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; word-break:break-word; }
-.cmdline { color:#7cb0ff; } .cerr { color:var(--red); }
+.cmdline { color:var(--accent); } .cerr { color:var(--red); }
+/* Log severity, Palenight. .ldim is the timestamp and INFO prefix, which should
+   recede so the message itself is what the eye lands on. */
+.ldim { color:var(--termdim); } .lwarn { color:var(--amber); } .lerr { color:var(--red); }
+.lok { color:var(--green); } .linfo { color:var(--accent); } .lcyan { color:var(--cyan); }
 .toolrow { display:flex; gap:8px; align-items:center; margin:10px 0; flex-wrap:wrap; }
 .toolrow label { display:flex; align-items:center; gap:5px; font-size:13px; color:var(--muted); }
 .toolrow input[type=search] { flex:1; min-width:120px; padding:9px 11px; border:1px solid var(--line); border-radius:9px; background:var(--tile); color:var(--fg); font-size:14px; min-height:40px; }
@@ -106,8 +135,8 @@ h2.section { font-size:12px; letter-spacing:.6px; text-transform:uppercase; colo
 .quick button { flex:0 0 auto; background:var(--tile); border:1px solid var(--line); color:var(--fg); border-radius:9px; padding:9px 12px; font:13px ui-monospace,monospace; min-height:40px; }
 .inputbar { display:flex; gap:8px; align-items:center; margin-top:10px; }
 .inputbar .chev { color:var(--muted); font:15px ui-monospace,monospace; padding-left:4px; }
-.inputbar input { flex:1; font:14px ui-monospace,monospace; padding:12px; border:1px solid var(--line); border-radius:10px; background:var(--termbg); color:var(--fg); }
-.inputbar button { padding:0 18px; border:0; border-radius:10px; background:var(--accent); color:#fff; font-weight:600; min-height:44px; }
+.inputbar input { flex:1; font:14px ui-monospace,monospace; padding:12px; border:1px solid var(--line); border-radius:10px; background:var(--tile); color:var(--fg); }
+.inputbar button { padding:0 18px; border:0; border-radius:10px; background:var(--btn-start); color:var(--btn-fg); font-weight:600; min-height:44px; }
 
 /* meta / overview */
 .kv { display:flex; justify-content:space-between; gap:12px; padding:10px 0; border-bottom:1px solid var(--line); font-size:14px; }
@@ -129,8 +158,8 @@ h2.section { font-size:12px; letter-spacing:.6px; text-transform:uppercase; colo
 .field select, .field input { padding:10px; border:1px solid var(--line); border-radius:9px; background:var(--tile); color:var(--fg); font-size:16px; min-height:44px; }
 .days { display:flex; gap:5px; flex-wrap:wrap; }
 .days button { border:1px solid var(--line); background:var(--tile); color:var(--fg); border-radius:8px; padding:8px 10px; min-height:40px; font-size:13px; }
-.days button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
-.primary { background:var(--accent); color:#fff; border:0; border-radius:11px; padding:13px; font-weight:600; width:100%; min-height:46px; margin-top:8px; }
+.days button.on { background:var(--btn-start); color:var(--btn-fg); border-color:var(--btn-start); }
+.primary { background:var(--btn-start); color:var(--btn-fg); border:0; border-radius:11px; padding:13px; font-weight:600; width:100%; min-height:46px; margin-top:8px; }
 .danger { background:none; color:var(--red); border:1px solid var(--red); border-radius:11px; padding:12px; font-weight:600; width:100%; min-height:46px; margin-top:8px; }
 .note { font-size:13px; color:var(--muted); margin-top:8px; }
 .fail { color:var(--red); } .okrun { color:var(--muted); } .timeout { color:var(--amber); }
@@ -141,7 +170,7 @@ h2 { font-size:15px; color:var(--fg2); font-weight:600; margin:18px 2px 8px; }
 .sheet header { display:flex; align-items:center; gap:8px; padding:4px 0; }
 .sheet .fp { flex:1; font:12px ui-monospace,monospace; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .sheet .lnk { background:none; border:0; color:var(--accent); font-size:15px; min-height:40px; padding:0 6px; }
-.sheet .save { color:#fff; background:var(--accent); border-radius:8px; padding:0 14px; font-weight:600; }
+.sheet .save { color:var(--btn-fg); background:var(--btn-start); border-radius:8px; padding:0 14px; font-weight:600; }
 .sheet textarea { flex:1; width:100%; font:13px/1.5 ui-monospace,monospace; border:1px solid var(--line); border-radius:9px; background:var(--termbg); color:var(--termfg); padding:10px; resize:none; }
 .acc { display:flex; gap:6px; overflow-x:auto; padding:8px 0 calc(8px + env(safe-area-inset-bottom)); }
 .acc button { flex:0 0 auto; background:var(--tile); border:1px solid var(--line); color:var(--fg); border-radius:9px; padding:10px 13px; font:14px ui-monospace,monospace; min-width:46px; min-height:44px; }
@@ -182,3 +211,10 @@ body.detail main { padding-bottom:84px; }  /* clear the bottom bar */
 }
 
 @media (prefers-reduced-motion: reduce) { * { transition:none !important; animation:none !important; scroll-behavior:auto !important; } }
+
+/* Scrollbars. WebKit only styles these with an explicit rule; without it the
+   panel gets the light-on-dark default that fights the chrome. */
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--scroll); border-radius:6px; }
+* { scrollbar-color: var(--scroll) transparent; }

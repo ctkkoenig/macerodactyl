@@ -130,6 +130,42 @@ public enum DockerPSParser {
         return nil
     }
 
+    /// Uptime for a running container, compacted for a stat tile ("3d", "24h").
+    ///
+    /// Read out of the status string rather than `docker inspect .State.StartedAt`
+    /// on purpose. The status already arrives with the single `docker ps` that
+    /// builds the whole list; inspecting per container would mean one extra
+    /// process spawn per row on every poll of the landing page.
+    ///
+    /// Returns nil for anything not currently up. "Exited (0) 2 hours ago" has a
+    /// duration in it too, but it is a *downtime*, and labelling that "uptime"
+    /// would be worse than showing nothing.
+    public static func parseUptime(fromStatus status: String) -> String? {
+        let trimmed = status.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("Up ") else { return nil }
+
+        // "Up Less than a second", "Up About a minute", "Up About an hour".
+        if trimmed.contains("Less than a second") { return "0s" }
+        if trimmed.contains("About a minute") { return "1m" }
+        if trimmed.contains("About an hour") { return "1h" }
+
+        guard let match = trimmed.firstMatch(of: /Up (\d+) (second|minute|hour|day|week|month|year)s?/) else {
+            return nil
+        }
+        let value = String(match.1)
+        let unit: String
+        switch String(match.2) {
+        case "second": unit = "s"
+        case "minute": unit = "m"
+        case "hour": unit = "h"
+        case "day": unit = "d"
+        case "week": unit = "w"
+        case "month": unit = "mo"
+        default: unit = "y"
+        }
+        return value + unit
+    }
+
     /// `docker ps` renders labels as "k1=v1,k2=v2". Values can themselves
     /// contain commas (working_dir paths, descriptions), so a segment without
     /// "=" is glued back onto the previous value.
