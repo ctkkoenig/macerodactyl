@@ -233,15 +233,22 @@ public final class SMC: @unchecked Sendable {
     /// "the" CPU temperature. Averaging the populated ones reproduces what
     /// Activity Monitor and the third-party tools report.
     ///
-    /// Zero and obviously-invalid readings are skipped: unpopulated sensors read
-    /// exactly 0, and including them would drag the mean toward room temperature.
+    /// Sensors on parked cores are skipped, not averaged in. Apple silicon powers
+    /// down whole clusters at idle and their die sensors fall toward zero; during
+    /// a quiet window this machine logged a "CPU temperature" of 2.6 C, because a
+    /// handful of parked sensors reading 1-3 C were being averaged with the few
+    /// still awake.
+    ///
+    /// The floor is 20 C rather than 0. A powered die is never below ambient, so
+    /// anything under 20 is a sensor that is off, not a cold CPU — and a `> 1`
+    /// test lets exactly the wrong readings through.
     public func meanTemperature(prefix: String) -> Double? {
         let keys = allKeys().filter { $0.hasPrefix(prefix) }
         guard !keys.isEmpty else { return nil }
         var total = 0.0
         var n = 0
         for key in keys {
-            guard let value = read(key), value > 1, value < 150 else { continue }
+            guard let value = read(key), value >= 20, value < 150 else { continue }
             total += value
             n += 1
         }
