@@ -30,6 +30,10 @@ struct PanelRoutes {
     let store: PanelDataStore
     let rateLimiter: LoginRateLimiter
     let containers: ContainerService
+    /// Reads the machine's own sensors for the status page. Shared with the
+    /// sampler's collector would be neater, but this one only ever serves the
+    /// live reading — the history comes from the store.
+    let hostMetrics: HostMetricsCollector? = HostMetricsCollector()
     /// Mark session cookies `Secure` (set when the server is serving HTTPS).
     var secureCookies: Bool = false
     /// Shared across requests for the lifetime of the router (see `healthz`).
@@ -97,6 +101,13 @@ struct PanelRoutes {
         let admin = api.group("maintenance").add(middleware: RequireAdmin())
         admin.get("disk", use: apiDiskUsage)
         admin.post("image-prune", use: apiImagePrune)
+
+        // Host status is daemon-global too: it describes the machine, not any
+        // one container, so a scoped user must not reach it. Same RequireAdmin
+        // treatment as maintenance, and the same 404-not-403 concealment.
+        let host = api.group("host").add(middleware: RequireAdmin())
+        host.get(use: apiHostStatus)
+        host.get("history", use: apiHostHistory)
     }
 
     // MARK: HTML pages
@@ -519,6 +530,31 @@ struct PanelRoutes {
                 detail: "remove: \(error)")
             return json(["error": "\(error)"], status: .internalServerError)
         }
+    }
+
+    // MARK: Host status (admin-only)
+
+    /// The machine's current readings. Nulls are preserved rather than
+    /// defaulted: a missing sensor must not render as 0 C.
+    @Sendable func apiHostStatus(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        _ = try context.requireIdentity()
+        guard let hostMetrics else { return json(["error": "unavailable"], status: .serviceUnavailable) }
+        return encode(hostMetrics.sample())
+    }
+
+    struct HostHistoryResponse: Encodable {
+        let hours: Int
+        let samples: [HostMetrics]
+    }
+
+    /// The retained series, default 24 hours — the window the sampler keeps.
+    /// Asking for more than that is not an error, there simply is no more.
+    @Sendable func apiHostHistory(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        _ = try context.requireIdentity()
+        let hours = request.uri.queryParameters["hours"].flatMap { Int($0) }.map { min(max($0, 1), 24) } ?? 24
+        let since = Date().addingTimeInterval(-Double(hours) * 3600)
+        let samples = (try? store.hostMetrics(since: since, limit: 5_000)) ?? []
+        return encode(HostHistoryResponse(hours: hours, samples: samples))
     }
 
     // MARK: Daemon-global maintenance (admin-only)

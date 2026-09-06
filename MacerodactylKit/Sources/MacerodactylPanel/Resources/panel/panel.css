@@ -109,6 +109,10 @@ h2.section { font-size:12px; letter-spacing:.6px; text-transform:uppercase; colo
 .statcard .v .lim { font-size:13px; font-weight:500; color:var(--muted); }
 .statcard.na .v { color:var(--muted); font-size:15px; }
 
+/* host status grid — two columns on a phone, more as width allows. The cards
+   are the same .statcard as the container view so the two pages read alike. */
+.hostgrid { display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:10px; }
+
 /* sparkline */
 .spark { width:100%; height:46px; display:block; }
 .spark .fill { fill:var(--cpu-fill); }

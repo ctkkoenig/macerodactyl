@@ -3,6 +3,9 @@ import Testing
 
 @testable import MacerodactylKit
 
+// Mirrors the guard on SMC.swift itself.
+#if canImport(IOKit)
+
 /// Covers the byte decoding, which is the part that can be wrong silently.
 ///
 /// The IOKit conversation itself is not unit-testable without the hardware, and
@@ -60,3 +63,5 @@ import Testing
         #expect(SMC.value(bytes: [], type: "ui8") == nil)
     }
 }
+
+#endif

@@ -47,15 +47,18 @@ const bytes = n => {
 };
 
 let statSrc = null, logSrc = null, landingTimer = null, current = null, detail = null, tab = 'console';
+let statusTimer = null;
 let me = { isAdmin: false };
 function closeStreams() { if (statSrc) { statSrc.close(); statSrc = null; } if (logSrc) { logSrc.close(); logSrc = null; } }
 function stopLanding() { if (landingTimer) { clearInterval(landingTimer); landingTimer = null; } }
+function stopStatus() { if (statusTimer) { clearInterval(statusTimer); statusTimer = null; } }
 async function jget(p) { const r = await fetch(p); if (!r.ok) throw r; return r.json(); }
 const enc = encodeURIComponent;
 const api = suffix => '/api/containers/' + enc(current) + suffix;
 
 document.getElementById('signout').onclick = async () => { await fetch('/logout', { method: 'POST', headers: CSRF }); location.href = '/login'; };
 document.getElementById('account').onclick = () => openAccount();
+document.getElementById('status').onclick = () => showStatus();
 backBtn.onclick = () => showHome();
 
 // --- account & security (2FA + sessions) ------------------------------------
@@ -156,7 +159,7 @@ function firstAddr(ports) {
   return m ? (':' + m[1]) : '';
 }
 async function showHome() {
-  closeStreams(); current = null; detail = null; isHome = true; document.body.classList.remove('detail');
+  closeStreams(); stopStatus(); current = null; detail = null; isHome = true; document.body.classList.remove('detail');
   titleEl.replaceChildren(document.createTextNode('Macerodactyl')); backBtn.hidden = true; tabbar.hidden = true;
   let list;
   try { list = await jget('/api/containers'); } catch (e) { show(msg('Could not load containers.', true)); return; }
@@ -239,9 +242,89 @@ async function pollStats() {
   });
 }
 
+// --- server status (global page) --------------------------------------------
+// Admin-only, mirroring the API: host readings describe the machine rather than
+// any one container, so a scoped user must not see them at all.
+function dur(seconds) {
+  if (seconds == null) return null;
+  const d = Math.floor(seconds / 86400), h = Math.floor((seconds % 86400) / 3600), m = Math.floor((seconds % 3600) / 60);
+  if (d) return d + 'd ' + h + 'h';
+  if (h) return h + 'h ' + m + 'm';
+  return m + 'm';
+}
+function num(v, digits, unit) { return v == null ? null : v.toFixed(digits) + (unit || ''); }
+
+async function showStatus() {
+  closeStreams(); stopLanding(); stopStatus();
+  current = null; detail = null; isHome = false;
+  document.body.classList.remove('detail');
+  titleEl.replaceChildren(document.createTextNode('Server status'));
+  backBtn.hidden = false; tabbar.hidden = true;
+  show(msg('Loading…'));
+  await renderStatus();
+  // Same cadence as the landing poller. The sampler writes every 20s, so a
+  // faster refresh would redraw identical history for no benefit.
+  statusTimer = setInterval(renderStatus, 5000);
+}
+
+async function renderStatus() {
+  let now, history;
+  try {
+    [now, history] = await Promise.all([jget('/api/host'), jget('/api/host/history?hours=24')]);
+  } catch (e) { show(msg('Host status unavailable.', true)); stopStatus(); return; }
+
+  const samples = history.samples || [];
+  const card = (cls, ic, k, main, sub) => h('div', { class: 'statcard ' + cls + (main == null ? ' na' : '') },
+    h('span', { class: 'ic', text: ic }),
+    h('div', { class: 'body' }, h('div', { class: 'k', text: k }),
+      h('div', { class: 'v' }, main == null ? '—' : main, sub ? h('span', { class: 'lim', text: ' / ' + sub }) : null)));
+
+  const diskUsed = (now.diskTotalBytes != null && now.diskFreeBytes != null) ? now.diskTotalBytes - now.diskFreeBytes : null;
+  const fanPct = (now.fanRPM != null && now.fanMaxRPM) ? (now.fanRPM / now.fanMaxRPM * 100) : null;
+
+  const cards = h('div', { class: 'hostgrid' },
+    card('cpu', '🌡', 'CPU temperature', num(now.cpuTempC, 1, '°C')),
+    card('mem', '🌡', 'GPU temperature', num(now.gpuTempC, 1, '°C')),
+    card('uptime', '❋', 'Fan', num(now.fanRPM, 0, ' rpm'), fanPct == null ? null : num(fanPct, 0, '% of max')),
+    card('net', '⚡', 'System power', num(now.systemPowerW, 1, ' W')),
+    card('cpu', '◔', 'CPU usage', num(now.cpuUsagePercent, 1, '%'), num(now.loadAverage1, 2, ' load')),
+    card('mem', '▤', 'Memory', now.memUsedBytes == null ? null : bytes(now.memUsedBytes),
+      now.memTotalBytes == null ? null : bytes(now.memTotalBytes)),
+    card('pids', '⇄', 'Swap', now.swapUsedBytes == null ? null : bytes(now.swapUsedBytes)),
+    card('net', '▣', 'Disk used', diskUsed == null ? null : bytes(diskUsed),
+      now.diskTotalBytes == null ? null : bytes(now.diskTotalBytes)),
+    card('uptime', '⏱', 'Uptime', dur(now.uptimeSeconds)));
+
+  // Charts are drawn only from samples that actually carry the series. A host
+  // without an SMC still gets CPU and memory history; it simply has no
+  // temperature chart, rather than a flat line at zero pretending to be one.
+  const series = (pick) => samples.map(pick).filter(v => v != null);
+  const chart = (label, values, variant, fmt) => {
+    if (values.length < 2) return null;
+    const last = values[values.length - 1], peak = Math.max(...values);
+    return h('div', { class: 'sparkwrap' },
+      h('div', { class: 'lbl', text: label + ' — 24h  ·  now ' + fmt(last) + '  ·  peak ' + fmt(peak) }),
+      sparkline(values, variant));
+  };
+
+  const charts = [
+    chart('CPU temperature', series(s => s.cpuTempC), null, v => v.toFixed(1) + '°C'),
+    chart('Fan', series(s => s.fanRPM), 'net', v => v.toFixed(0) + ' rpm'),
+    chart('CPU usage', series(s => s.cpuUsagePercent), null, v => v.toFixed(0) + '%'),
+    chart('Memory', series(s => s.memUsedBytes), 'net', v => bytes(v)),
+  ].filter(Boolean);
+
+  const coverage = samples.length
+    ? h('p', { class: 'msg', text: samples.length + ' samples over the last 24h' })
+    : h('p', { class: 'msg', text: 'No history yet — the sampler records every 20 seconds.' });
+
+  show([h('h2', { class: 'section', text: 'Now' }), cards,
+        h('h2', { class: 'section', text: '24 hour history' }), ...charts, coverage]);
+}
+
 // --- container view ---------------------------------------------------------
 window.enter = async function (name) {
-  stopLanding();
+  stopLanding(); stopStatus();
   try { detail = await jget('/api/containers/' + enc(name)); } catch (e) { show(msg('Unavailable.', true)); return; }
   current = name; isHome = false; document.body.classList.add('detail');
   titleEl.replaceChildren(document.createTextNode(name)); backBtn.hidden = false;
@@ -457,7 +540,7 @@ async function loadSparkline() {
   if (!samples.length) { host.replaceChildren(h('span', { class: 'lbl', text: 'measuring…' })); return; }
   host.replaceChildren(sparkline(samples.map(s => s.cpuPercent)));
 }
-function sparkline(values) {
+function sparkline(values, variant) {
   const W = 300, H = 44, n = values.length;
   const max = Math.max(1, ...values);
   const x = i => (n <= 1 ? 0 : (i / (n - 1)) * W);
@@ -465,7 +548,7 @@ function sparkline(values) {
   const pts = values.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1));
   const NS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('class', 'spark'); svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('class', 'spark' + (variant ? ' ' + variant : '')); svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('preserveAspectRatio', 'none');
   const area = document.createElementNS(NS, 'polygon');
   area.setAttribute('class', 'fill');
   area.setAttribute('points', '0,' + H + ' ' + pts.join(' ') + ' ' + W + ',' + H);
@@ -625,4 +708,10 @@ async function delSched() {
 }
 
 // --- boot -------------------------------------------------------------------
-(async () => { try { me = await jget('/api/me'); } catch (e) { } showHome(); })();
+(async () => {
+  try { me = await jget('/api/me'); } catch (e) { }
+  // The host API is admin-only and 404s for everyone else, so the entry point
+  // is hidden rather than offered-then-failing.
+  document.getElementById('status').hidden = !me.isAdmin;
+  showHome();
+})();

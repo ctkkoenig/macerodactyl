@@ -311,6 +311,39 @@ public enum PanelSchema {
             try db.execute("ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0")
             db.userVersion = 7
         }
+        if db.userVersion < 8 {
+            // Host-level metrics, for the status page. Separate table from
+            // `metrics` rather than a synthetic container row: the columns are
+            // different (there is no cpu limit or pid count for a machine), and
+            // a fake container name would leak into every container listing and
+            // scoping check.
+            //
+            // Every reading is nullable. A machine with no SMC still records its
+            // load and memory, and a null must stay distinguishable from a real
+            // zero — 0 C is a plausible-looking temperature, not a missing one.
+            try db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS host_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    measured_at TEXT NOT NULL,
+                    cpu_temp_c REAL,
+                    gpu_temp_c REAL,
+                    fan_rpm REAL,
+                    fan_max_rpm REAL,
+                    system_power_w REAL,
+                    cpu_usage_percent REAL,
+                    load_average_1 REAL,
+                    mem_used_bytes REAL,
+                    mem_total_bytes REAL,
+                    swap_used_bytes REAL,
+                    disk_free_bytes REAL,
+                    disk_total_bytes REAL,
+                    uptime_seconds REAL
+                );
+                CREATE INDEX IF NOT EXISTS idx_host_metrics_time ON host_metrics(measured_at);
+                """)
+            db.userVersion = 8
+        }
     }
 }
 
@@ -682,6 +715,65 @@ public final class PanelDataStore: Sendable {
                 pids: Int(row["pids"]?.asInt ?? 0),
                 measuredAt: (row["measured_at"]?.asString).flatMap { Self.metricsISO.date(from: $0) } ?? Date())
         }
+    }
+
+    /// Appends one host reading.
+    public func recordHostMetric(_ sample: HostMetrics) throws {
+        func real(_ value: Double?) -> SQLValue { value.map { SQLValue.real($0) } ?? .null }
+        try db.run(
+            """
+            INSERT INTO host_metrics
+            (measured_at, cpu_temp_c, gpu_temp_c, fan_rpm, fan_max_rpm, system_power_w,
+             cpu_usage_percent, load_average_1, mem_used_bytes, mem_total_bytes,
+             swap_used_bytes, disk_free_bytes, disk_total_bytes, uptime_seconds)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                .text(Self.metricsISO.string(from: sample.measuredAt)),
+                real(sample.cpuTempC), real(sample.gpuTempC), real(sample.fanRPM),
+                real(sample.fanMaxRPM), real(sample.systemPowerW),
+                real(sample.cpuUsagePercent), real(sample.loadAverage1),
+                real(sample.memUsedBytes), real(sample.memTotalBytes),
+                real(sample.swapUsedBytes), real(sample.diskFreeBytes),
+                real(sample.diskTotalBytes), real(sample.uptimeSeconds),
+            ])
+    }
+
+    /// Host readings oldest→newest, optionally only those on or after `since`.
+    public func hostMetrics(since: Date? = nil, limit: Int = 5_000) throws -> [HostMetrics] {
+        var sql = "SELECT * FROM host_metrics"
+        var bindings: [SQLValue] = []
+        if let since {
+            sql += " WHERE measured_at >= ?"
+            bindings.append(.text(Self.metricsISO.string(from: since)))
+        }
+        sql += " ORDER BY measured_at DESC LIMIT ?"
+        bindings.append(.integer(Int64(max(1, limit))))
+        return try db.query(sql, bindings).reversed().map { row in
+            var m = HostMetrics(
+                measuredAt: (row["measured_at"]?.asString).flatMap { Self.metricsISO.date(from: $0) } ?? Date())
+            m.cpuTempC = row["cpu_temp_c"]?.asDouble
+            m.gpuTempC = row["gpu_temp_c"]?.asDouble
+            m.fanRPM = row["fan_rpm"]?.asDouble
+            m.fanMaxRPM = row["fan_max_rpm"]?.asDouble
+            m.systemPowerW = row["system_power_w"]?.asDouble
+            m.cpuUsagePercent = row["cpu_usage_percent"]?.asDouble
+            m.loadAverage1 = row["load_average_1"]?.asDouble
+            m.memUsedBytes = row["mem_used_bytes"]?.asDouble
+            m.memTotalBytes = row["mem_total_bytes"]?.asDouble
+            m.swapUsedBytes = row["swap_used_bytes"]?.asDouble
+            m.diskFreeBytes = row["disk_free_bytes"]?.asDouble
+            m.diskTotalBytes = row["disk_total_bytes"]?.asDouble
+            m.uptimeSeconds = row["uptime_seconds"]?.asDouble
+            return m
+        }
+    }
+
+    /// Drops host readings older than `maxAge`. The status page looks back 24
+    /// hours, so anything older is dead weight.
+    public func pruneHostMetrics(maxAge: TimeInterval) throws {
+        let cutoff = Self.metricsISO.string(from: Date().addingTimeInterval(-maxAge))
+        try db.run("DELETE FROM host_metrics WHERE measured_at < ?", [.text(cutoff)])
     }
 
     /// Enforces the retention policy: drop samples older than `maxAge`, then cap

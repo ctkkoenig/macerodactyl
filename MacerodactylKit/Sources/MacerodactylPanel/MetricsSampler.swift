@@ -19,6 +19,9 @@ public actor MetricsSampler {
     /// Prune every this-many ticks rather than every tick (pruning is a delete
     /// over the whole table; no need to run it constantly).
     private let pruneEvery: Int
+    /// Samples the machine itself alongside the containers. Optional so a host
+    /// with no readable sensors, or a test, can leave it out entirely.
+    private let host: HostMetricsCollector?
 
     private var task: Task<Void, Never>?
     private var ticksSincePrune = 0
@@ -29,7 +32,8 @@ public actor MetricsSampler {
         interval: Duration = .seconds(20),
         retention: TimeInterval = 24 * 60 * 60,
         maxPerContainer: Int = 5_000,
-        pruneEvery: Int = 30
+        pruneEvery: Int = 30,
+        host: HostMetricsCollector? = HostMetricsCollector()
     ) {
         self.store = store
         self.containers = containers
@@ -37,6 +41,7 @@ public actor MetricsSampler {
         self.retention = retention
         self.maxPerContainer = maxPerContainer
         self.pruneEvery = max(1, pruneEvery)
+        self.host = host
     }
 
     public func start() {
@@ -57,9 +62,15 @@ public actor MetricsSampler {
         for sample in snapshot.values {
             try? store.recordMetric(sample)
         }
+        // Host reading on the same tick, so the container and machine histories
+        // share a time axis and can be read against each other.
+        if let host {
+            try? store.recordHostMetric(host.sample())
+        }
         ticksSincePrune += 1
         if ticksSincePrune >= pruneEvery {
             try? store.pruneMetrics(maxAge: retention, maxPerContainer: maxPerContainer)
+            try? store.pruneHostMetrics(maxAge: retention)
             ticksSincePrune = 0
         }
         return snapshot.count
@@ -68,6 +79,7 @@ public actor MetricsSampler {
     private func loop() async {
         // Prune once at startup so a long downtime's stale rows go promptly.
         try? store.pruneMetrics(maxAge: retention, maxPerContainer: maxPerContainer)
+        try? store.pruneHostMetrics(maxAge: retention)
         while !Task.isCancelled {
             _ = await sampleOnce()
             try? await Task.sleep(for: interval)
