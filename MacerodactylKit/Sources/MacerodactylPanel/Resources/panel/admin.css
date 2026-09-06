@@ -7,22 +7,26 @@
    (--panel/--sidebar here, --card/--chrome there), and unifying them would be a
    much larger change than repainting. */
 :root {
-  --bg: #262626;
-  --sidebar: #17171b;
-  --panel: #212121;
-  --panel-2: #171717;
-  --line: #333333;
-  --text: #fafafa;
-  --muted: #929292;
-  /* Palenight blue is light, so the darker button blue is used wherever text
-     sits on the accent; the bright one is the hover. */
-  --accent: #3469c0;
-  --accent-hi: #82aaff;
-  --good: #c3e88d;
-  --bad: #ff5370;
-  --warn: #ffcb6b;
+  /* Harbor, mapped onto this page's own variable names so the admin surface does
+     not read as a different product. A remap rather than a shared file: the two
+     stylesheets name their roles differently (--panel/--sidebar here,
+     --card/--chrome there), and unifying them is a bigger change than this. */
+  --bg: #1b2027;
+  --sidebar: #141920;
+  --panel: #222933;
+  --panel-2: #1a2029;
+  --line: #2e3843;
+  --text: #e6ecf2;
+  --muted: #8795a6;
+  /* The accent carries text, so it is the darker blue; the bright one is hover. */
+  --accent: #2f6fb8;
+  --accent-hi: #4ea6e8;
+  --good: #5cc98f;
+  --bad: #e8635f;
+  --warn: #e0a54a;
   --radius: 8px;
 }
+
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body {

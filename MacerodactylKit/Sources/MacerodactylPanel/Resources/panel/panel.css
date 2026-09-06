@@ -2,33 +2,39 @@
    look (a control panel is expected dark), so no light variant here. */
 :root {
   color-scheme: dark;
-  /* Chrome. --bg is the page; --chrome is the header and sidebar, which sit
-     darker than the content they frame; --card is a raised surface on --bg;
-     --tile is the recessed well inside a card (stat-card icon, command input). */
-  --bg:#262626; --chrome:#17171B; --card:#212121; --tile:#171717; --tile2:#2e2e2e;
-  --line:#333333; --scroll:#444444;
+  /* Harbor. Chrome sits darker than the content it frames; --card is a raised
+     surface on --bg; --tile is the recessed well inside a card (stat-card icon,
+     command input). Neutrals carry a blue bias so they read as chosen rather
+     than as undifferentiated grey. */
+  --bg:#1b2027; --chrome:#141920; --card:#222933; --tile:#1a2029; --tile2:#2a323c;
+  --line:#2e3843; --scroll:#3a4653;
 
   /* Text, brightest to dimmest. --muted is the "/ 8 GiB" fraction. */
-  --fg:#fafafa; --fg2:#e5e5e5; --muted:#929292; --glyph:#f5f5f5;
+  --fg:#e6ecf2; --fg2:#c4ced9; --muted:#8795a6; --glyph:#e6ecf2;
 
-  /* Sidebar. The active tile is the one strong red in the chrome. */
-  --nav-active:#c72510; --nav-active-fg:#ffffff; --nav-glyph:#9e9e9e; --nav-label:#ffffff;
+  /* Sidebar. The active tile is the accent at full strength, so its glyph is
+     the dark ink -- #4ea6e8 is far too light to carry white. */
+  --nav-active:#4ea6e8; --nav-active-fg:#0c1116; --nav-glyph:#8795a6; --nav-label:#e6ecf2;
 
-  /* Power buttons carry meaning by colour, so they are named by action. */
-  --btn-start:#3469c0; --btn-restart:#737373; --btn-stop:#dc2626; --btn-fg:#fafafa;
+  /* Power buttons are named by action, since start/restart/stop carry meaning.
+     Their fills are deliberately darker than the accent, so unlike --nav-active
+     they take light text. */
+  --btn-start:#2f6fb8; --btn-restart:#3a4653; --btn-stop:#bc433b; --btn-fg:#eaf1f8;
 
-  /* Material Palenight. Also the console's syntax colours, so status colour and
-     log colour cannot drift apart. */
-  --green:#c3e88d; --amber:#ffcb6b; --red:#ff5370; --accent:#82aaff;
-  --cyan:#89ddff; --violet:#c792ea; --teal:#89ddff; --accent-dim:#2a3a55;
+  /* Semantic colours, kept independent of the accent: running/warning/stopped
+     must read at a glance whatever the accent happens to be. The console reuses
+     them, so a warning is the same amber in a stat tile and in a log line. */
+  --green:#5cc98f; --amber:#e0a54a; --red:#e8635f; --accent:#4ea6e8;
+  --cyan:#4fc3d9; --violet:#a98be0; --teal:#4fc3d9; --accent-dim:#1e3a52;
 
   /* Console. --termdim is the timestamp/INFO prefix. */
-  --termbg:#131a20; --termfg:#e6e7e7; --termdim:#696e71;
+  --termbg:#11161c; --termfg:#e6ecf2; --termdim:#5d6b7b;
 
-  /* Charts. Fills are the line at ~30% over --bg, precomputed so the SVG needs
-     no colour-mix support. */
-  --cpu-line:#22d3ee; --cpu-fill:#1a4d5b; --net-line:#f87171; --net-fill:#702121;
+  /* Charts. Fills are the line at ~30% over the page background, precomputed so
+     the SVG needs no colour-mix support. */
+  --cpu-line:#4fc3d9; --cpu-fill:#173a47; --net-line:#e8635f; --net-fill:#472321;
 }
+
 * { box-sizing:border-box; }
 body { margin:0; font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; background:var(--bg); color:var(--fg); -webkit-text-size-adjust:100%; }
 :focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:4px; }
