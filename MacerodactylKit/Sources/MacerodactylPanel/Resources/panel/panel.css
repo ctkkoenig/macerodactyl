@@ -47,6 +47,13 @@ h2.section { font-size:12px; letter-spacing:.6px; text-transform:uppercase; colo
 
 /* ---- container workspace (detail) --------------------------------------- */
 /* The nav is a left sidebar at wide widths and the bottom bar at narrow. */
+/* The `hidden` attribute is only a UA-stylesheet `display:none`, so ANY author
+   rule that sets `display` silently defeats it. `.tabbar` sets `display:flex`
+   below, which is why `tabbar.hidden = true` in showHome() set the attribute and
+   changed nothing — the Console/Overview/Logs bar stayed on screen after Back.
+   This guard restores the attribute's meaning for every element that uses it. */
+[hidden] { display: none !important; }
+
 .tabbar { z-index:20; background:var(--card); }
 .tabbar .navitem { display:flex; align-items:center; border:0; background:none; color:var(--muted); }
 .tabbar .navitem .tile { display:flex; align-items:center; justify-content:center; border-radius:10px; background:var(--tile); flex:0 0 auto; }

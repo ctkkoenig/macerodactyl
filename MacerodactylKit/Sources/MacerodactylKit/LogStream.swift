@@ -25,7 +25,32 @@ public enum LogStreamService {
     /// cancelled (window closed, container switched), the stream's termination
     /// handler tears the process down — nothing outlives its consumer.
     public static func lines(for containerID: String, cli: DockerCLI, tail: Int = 500) -> AsyncThrowingStream<String, Error> {
-        cli.streamLines(DockerArgs.logs(containerID: containerID, tail: tail))
+        let raw = cli.streamLines(DockerArgs.logs(containerID: containerID, tail: tail))
+        // Sanitize here rather than in each consumer: the SwiftUI log view, both
+        // panel container services and KitCheck all come through this function,
+        // and a container running with a TTY emits terminal control codes that
+        // are meaningless — and, over SSE, actively corrupting — downstream.
+        return AsyncThrowingStream { continuation in
+            let pump = Task {
+                do {
+                    for try await line in raw {
+                        let cleaned = LogSanitizer.clean(line)
+                        // A line that was pure terminal machinery (a bare prompt
+                        // redraw, say) cleans to nothing. Dropping it is the
+                        // point. A line that was genuinely blank stays blank.
+                        if cleaned.isEmpty && !line.isEmpty { continue }
+                        continuation.yield(cleaned)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            // Preserves the ownership contract described above: cancelling the
+            // consumer cancels this pump, which ends iteration of `raw`, which
+            // fires its own termination handler and tears down the child process.
+            continuation.onTermination = { _ in pump.cancel() }
+        }
     }
 
     /// A bounded, non-streaming snapshot of a container's recent logs, for search
@@ -60,7 +85,9 @@ public enum LogStreamService {
             if a.ts == b.ts { return a.order < b.order }
             return a.ts < b.ts
         }
-        return sorted.map { String($0.line) }.joined(separator: "\n")
+        // Cleaned after sorting, never before: the sort key is the leading
+        // `--timestamps` prefix, and it has to be read off the raw line.
+        return sorted.map { LogSanitizer.clean(String($0.line)) }.joined(separator: "\n")
     }
 }
 
