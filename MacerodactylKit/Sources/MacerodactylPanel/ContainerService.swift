@@ -21,6 +21,9 @@ public protocol ContainerService: Sendable {
     func logHistory(containerName: String, tail: Int, since: String?) async -> String?
     /// Run one console command (exec, or RCON for Minecraft).
     func runConsole(containerName: String, command: String) async -> ConsoleEntry?
+    /// Send one line to a running server's stdin (the interactive console). Output
+    /// appears in the live log stream. Returns false if the server isn't running.
+    func consoleSend(containerName: String, line: String) async -> Bool
     /// File service for a container, or nil if it has no stack folder.
     func fileService(containerName: String) async -> FileService?
     /// Live stats snapshot for all containers (for the landing).
@@ -28,6 +31,18 @@ public protocol ContainerService: Sendable {
     /// Configured resource limits per container (from `docker inspect`; static-
     /// ish, so callers fetch on load rather than every poll). Keyed by name.
     func limits() async -> [String: ContainerLimits]
+    /// Last-exit detail for a stopped container (exit code, OOM kill, error,
+    /// restart count) — one `docker inspect`, so callers fetch it only for a
+    /// container that isn't running. nil if it's gone or inspect fails.
+    func exitInfo(containerName: String) async -> ContainerExitInfo?
+    /// When a container started (for a truthful uptime / startup-state probe),
+    /// or nil if unavailable.
+    func startedAt(containerName: String) async -> Date?
+    /// Ensures the shared managed-database engine is running and executes admin
+    /// SQL against it (create/drop database + user). Throws if databases aren't
+    /// available here (no docker access). The SQL is built by the caller from
+    /// `DatabaseProvisioning`'s allow-list — never from raw user input.
+    func executeDatabaseSQL(_ sql: String, engine: DatabaseEngineConfig) async throws
     /// Live stats stream for one container (for the focused view).
     func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>?
     /// The current schedule for a container, if any, plus its last run.
@@ -52,6 +67,32 @@ public protocol ContainerService: Sendable {
     /// Removes the container (must be stopped). Throws on conflict/failure.
     func remove(containerName: String) async throws
 
+    // MARK: Provisioning (admin-only at the route layer)
+
+    /// Creates a new server as a compose stack under the stacks root, streaming
+    /// the install + startup log. Admin-only; the spec is fully resolved upstream.
+    func provision(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error>
+    /// Re-applies an edited spec (regenerate compose + `up -d`), preserving data.
+    func reconfigure(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error>
+    /// Re-runs the egg install over existing data, then brings the server up.
+    func reinstall(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error>
+    /// Tears a provisioned server down (`compose down -v` + remove its folder).
+    func deprovision(name: String) async throws
+    /// Whether a stack folder with this name already exists under the stacks root.
+    func stackExists(name: String) async -> Bool
+
+    // MARK: Backups (gated on the `.backups` permission)
+
+    /// Archives the server's data dir to `<stack>/backups/<uuid>.tar.gz`. Returns
+    /// nil if the container has no stack folder.
+    func createBackup(containerName: String) async throws -> BackupService.CreatedBackup?
+    /// Stops the container (if running) and restores a backup over its data.
+    func restoreBackup(containerName: String, fileName: String) async throws
+    /// Deletes a backup file.
+    func deleteBackupFile(containerName: String, fileName: String) async throws
+    /// The on-disk backup file for download, or nil if missing/invalid.
+    func backupFileURL(containerName: String, fileName: String) async -> URL?
+
     // MARK: Daemon-global maintenance (admin-only at the route layer)
 
     /// `docker image prune -f` — reclaims dangling images across the daemon.
@@ -60,12 +101,23 @@ public protocol ContainerService: Sendable {
     func diskUsage() async throws -> String
 }
 
+/// A one-line error stream, for when provisioning can't even start (e.g. docker
+/// is unavailable) — mirrors the shape provisioning normally streams.
+func provisionErrorStream(_ message: String) -> AsyncThrowingStream<String, Error> {
+    AsyncThrowingStream { continuation in
+        continuation.yield("✖ \(message)")
+        continuation.finish(throwing: ContainerServiceError.unavailable(message))
+    }
+}
+
 /// Live implementation backed by the shared `ContainerStore` (native source of
 /// truth) plus the docker CLI. Power actions go through the store so its
 /// `groups` update and open native windows refresh without a manual reload.
 public struct LiveContainerService: ContainerService {
     let store: ContainerStore
     let stacksRoot: @Sendable () -> URL
+    /// Shared across requests so one attach session per container is reused.
+    let consoleHub = ConsoleHub()
 
     public init(store: ContainerStore, stacksRoot: @escaping @Sendable () -> URL = { AppSettings.stacksRoot }) {
         self.store = store
@@ -129,6 +181,13 @@ public struct LiveContainerService: ContainerService {
         }
     }
 
+    public func consoleSend(containerName: String, line: String) async -> Bool {
+        guard let container = await container(named: containerName), container.isRunning,
+            let cli = await MainActor.run(body: { store.cli })
+        else { return false }
+        return await consoleHub.send(cli: cli, containerID: container.id, line: line)
+    }
+
     public func fileService(containerName: String) async -> FileService? {
         guard let container = await container(named: containerName) else { return nil }
         return FileService(container: container, stacksRoot: stacksRoot())
@@ -143,6 +202,29 @@ public struct LiveContainerService: ContainerService {
         guard let cli = await MainActor.run(body: { store.cli }) else { return [:] }
         let ids = await allContainers().map(\.id)
         return await cli.containerLimits(ids: ids)
+    }
+
+    public func exitInfo(containerName: String) async -> ContainerExitInfo? {
+        guard let container = await container(named: containerName),
+            let cli = await MainActor.run(body: { store.cli })
+        else { return nil }
+        return await cli.inspectState(containerID: container.id)
+    }
+
+    public func startedAt(containerName: String) async -> Date? {
+        guard let container = await container(named: containerName),
+            let cli = await MainActor.run(body: { store.cli })
+        else { return nil }
+        return await cli.startedAt(containerID: container.id)
+    }
+
+    public func executeDatabaseSQL(_ sql: String, engine: DatabaseEngineConfig) async throws {
+        guard let cli = await MainActor.run(body: { store.cli }) else {
+            throw ContainerServiceError.notFound
+        }
+        let service = ManagedDatabaseService(cli: cli)
+        try await service.ensureRunning(config: engine)
+        try await service.runSQL(config: engine, sql: sql)
     }
 
     public func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>? {
@@ -199,6 +281,70 @@ public struct LiveContainerService: ContainerService {
         guard let container = await container(named: containerName), let cli = await MainActor.run(body: { store.cli })
         else { throw ContainerServiceError.notFound }
         try await ContainerLifecycle.remove(cli: cli, container: container)
+    }
+
+    public func provision(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        guard let cli = await MainActor.run(body: { store.cli }) else {
+            return provisionErrorStream("Docker is unavailable.")
+        }
+        return ServerProvisioner(cli: cli, stacksRoot: stacksRoot()).provision(spec)
+    }
+
+    public func reconfigure(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        guard let cli = await MainActor.run(body: { store.cli }) else {
+            return provisionErrorStream("Docker is unavailable.")
+        }
+        return ServerProvisioner(cli: cli, stacksRoot: stacksRoot()).reconfigure(spec)
+    }
+
+    public func reinstall(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        guard let cli = await MainActor.run(body: { store.cli }) else {
+            return provisionErrorStream("Docker is unavailable.")
+        }
+        if let container = await container(named: spec.name), container.isRunning {
+            try? await power(.stop, containerName: spec.name)
+        }
+        return ServerProvisioner(cli: cli, stacksRoot: stacksRoot()).reinstall(spec)
+    }
+
+    public func deprovision(name: String) async throws {
+        guard let cli = await MainActor.run(body: { store.cli }) else { throw ContainerServiceError.notFound }
+        try await ServerProvisioner(cli: cli, stacksRoot: stacksRoot()).deprovision(name: name)
+    }
+
+    public func stackExists(name: String) async -> Bool {
+        FileManager.default.fileExists(atPath: stacksRoot().appendingPathComponent(name).path)
+    }
+
+    private func stackDir(for name: String) async -> URL? {
+        guard let container = await container(named: name), let wd = container.composeWorkingDir, !wd.isEmpty
+        else { return nil }
+        return URL(fileURLWithPath: wd)
+    }
+
+    public func createBackup(containerName: String) async throws -> BackupService.CreatedBackup? {
+        guard let dir = await stackDir(for: containerName), let cli = await MainActor.run(body: { store.cli })
+        else { return nil }
+        return try await BackupService.create(cli: cli, stackDir: dir, dataDirName: "data")
+    }
+
+    public func restoreBackup(containerName: String, fileName: String) async throws {
+        guard let dir = await stackDir(for: containerName), let cli = await MainActor.run(body: { store.cli })
+        else { throw ContainerServiceError.notFound }
+        if let container = await container(named: containerName), container.isRunning {
+            try? await power(.stop, containerName: containerName)
+        }
+        try await BackupService.restore(cli: cli, stackDir: dir, dataDirName: "data", fileName: fileName)
+    }
+
+    public func deleteBackupFile(containerName: String, fileName: String) async throws {
+        guard let dir = await stackDir(for: containerName) else { return }
+        try BackupService.delete(stackDir: dir, fileName: fileName)
+    }
+
+    public func backupFileURL(containerName: String, fileName: String) async -> URL? {
+        guard let dir = await stackDir(for: containerName) else { return nil }
+        return BackupService.fileURL(stackDir: dir, fileName: fileName)
     }
 
     public func imagePrune() async throws -> String {

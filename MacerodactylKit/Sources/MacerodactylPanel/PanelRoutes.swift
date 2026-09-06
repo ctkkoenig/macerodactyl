@@ -46,13 +46,27 @@ struct PanelRoutes {
         router.post("login", use: login)
         router.post("logout", use: logout)
         router.get("me", use: appPage)
+        // First-run web setup (only reachable while no account exists).
+        router.get("setup", use: setupPage)
+        router.post("setup", use: setupSubmit)
+        // Password reset via a one-time admin-issued token.
+        router.get("reset", use: resetPage)
+        router.post("reset", use: resetSubmit)
 
         // Static frontend assets (no secrets — this is the client code). Served
         // from a fixed allow-list, never a filename from the URL.
-        router.get("assets/panel.css", use: { _, _ in Self.asset(.panelCSS) })
-        router.get("assets/panel.js", use: { _, _ in Self.asset(.panelJS) })
-        router.get("assets/login.css", use: { _, _ in Self.asset(.loginCSS) })
-        router.get("assets/login.js", use: { _, _ in Self.asset(.loginJS) })
+        router.get("assets/panel.css", use: { req, _ in Self.asset(.panelCSS, req) })
+        router.get("assets/panel.js", use: { req, _ in Self.asset(.panelJS, req) })
+        router.get("assets/login.css", use: { req, _ in Self.asset(.loginCSS, req) })
+        router.get("assets/login.js", use: { req, _ in Self.asset(.loginJS, req) })
+        router.get("assets/setup.js", use: { req, _ in Self.asset(.setupJS, req) })
+        router.get("assets/reset.js", use: { req, _ in Self.asset(.resetJS, req) })
+        router.get("assets/admin.css", use: { req, _ in Self.asset(.adminCSS, req) })
+        router.get("assets/admin.js", use: { req, _ in Self.asset(.adminJS, req) })
+        // The admin SPA shell — a separate bundle from the phone panel. The HTML
+        // is public client code (no secrets); a non-admin who loads it is bounced
+        // client-side, and every /api/admin/* call it makes is RequireAdmin-gated.
+        router.get("admin", use: appPageAdmin)
 
         let api = router.group("api").add(middleware: RequireAuth())
         api.get("me", use: apiMe)
@@ -79,17 +93,44 @@ struct PanelRoutes {
         scoped.get(":name/stats", use: apiStatsStream)
         scoped.get(":name/metrics", use: apiMetrics)
         scoped.post(":name/console", use: apiConsole)
+        scoped.post(":name/console/input", use: apiConsoleInput)
         scoped.get(":name/files", use: apiFilesList)
         scoped.get(":name/files/content", use: apiFileRead)
         scoped.put(":name/files/content", use: apiFileWrite)
         scoped.get(":name/files/download", use: apiFileDownload)
         scoped.post(":name/files/upload", use: apiFileUpload)
         scoped.post(":name/files/dir", use: apiFileMkdir)
+        scoped.post(":name/files/pull", use: apiFilePull)
+        scoped.post(":name/files/compress", use: apiFileCompress)
+        scoped.post(":name/files/decompress", use: apiFileDecompress)
         scoped.post(":name/files/move", use: apiFileMove)
         scoped.delete(":name/files/entry", use: apiFileDelete)
         scoped.get(":name/schedule", use: apiScheduleGet)
         scoped.post(":name/schedule", use: apiScheduleSet)
         scoped.delete(":name/schedule", use: apiScheduleDelete)
+        // Backups (gated on .backups). Data snapshot / restore / download.
+        scoped.get(":name/backups", use: apiBackupsList)
+        scoped.post(":name/backups", use: apiBackupCreate)
+        scoped.get(":name/backups/download", use: apiBackupDownload)
+        scoped.post(":name/backups/restore", use: apiBackupRestore)
+        scoped.delete(":name/backups", use: apiBackupDelete)
+
+        // Sub-users (owner/admin only; enforced in the handlers, not by the
+        // scope middleware — it maps these to `.view`, which every party holds).
+        scoped.get(":name/subusers", use: apiSubUsersList)
+        scoped.put(":name/subusers", use: apiSubUserSet)
+        scoped.delete(":name/subusers/:username", use: apiSubUserRemove)
+
+        // This server's activity log (view-gated; visible to everyone who can
+        // see the server, source IPs withheld from the client view).
+        scoped.get(":name/activity", use: apiActivity)
+
+        // Client-area network (allocation) management — owner/admin only,
+        // enforced in the handlers (the middleware maps these to `.view`).
+        scoped.get(":name/allocations", use: apiServerAllocationsList)
+        scoped.post(":name/allocations", use: apiServerAllocationAdd)
+        scoped.delete(":name/allocations/:allocId", use: apiServerAllocationRemove)
+        scoped.post(":name/allocations/:allocId/primary", use: apiServerAllocationPrimary)
         // Destructive lifecycle — all gated on the `.lifecycle` permission via
         // the scope middleware's path mapping. Mutating, so CSRF-protected.
         scoped.post(":name/pull", use: apiPull)
@@ -108,17 +149,116 @@ struct PanelRoutes {
         let host = api.group("host").add(middleware: RequireAdmin())
         host.get(use: apiHostStatus)
         host.get("history", use: apiHostHistory)
+
+        registerAdmin(on: api)
     }
 
     // MARK: HTML pages
 
     @Sendable func root(_ request: Request, context: PanelRequestContext) async throws -> Response {
-        redirect(context.identity == nil ? "/login" : "/me")
+        if context.identity != nil { return redirect("/me") }
+        // A brand-new panel with no accounts sends the operator to web setup
+        // rather than a login form they can't yet satisfy.
+        if (try? store.hasAnyUser()) == false { return redirect("/setup") }
+        return redirect("/login")
     }
 
     @Sendable func loginPage(_ request: Request, context: PanelRequestContext) async throws -> Response {
         if context.identity != nil { return redirect("/me") }
+        if (try? store.hasAnyUser()) == false { return redirect("/setup") }
         return html(PanelAssets.string(.loginHTML))
+    }
+
+    // MARK: First-run setup (web-first admin bootstrap)
+
+    struct SetupBody: Decodable {
+        let username: String
+        let password: String
+    }
+
+    /// The setup page — only while the panel has no accounts. Once any account
+    /// exists it redirects to login, so it is never a second door in.
+    @Sendable func setupPage(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        guard (try? store.hasAnyUser()) == false else { return redirect("/login") }
+        return html(PanelAssets.string(.setupHTML))
+    }
+
+    /// Creates the first administrator and signs them in. Permanently closed the
+    /// instant any account exists — this is THE guard that keeps an unauthenticated
+    /// endpoint that mints an admin from ever being a takeover on a live panel.
+    @Sendable func setupSubmit(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        guard (try? store.hasAnyUser()) == false else {
+            return json(["error": "Setup is already complete. Sign in instead."], status: .forbidden)
+        }
+        guard let body = try? await request.decode(as: SetupBody.self, context: context) else {
+            return json(["error": "Invalid request"], status: .badRequest)
+        }
+        let username = body.username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard username.range(of: "^[a-zA-Z0-9._-]{1,32}$", options: .regularExpression) != nil else {
+            return json(["error": "Username: 1–32 characters, letters/digits/._-"], status: .badRequest)
+        }
+        guard body.password.count >= 8 else {
+            return json(["error": "Password must be at least 8 characters."], status: .badRequest)
+        }
+        let user: PanelUser
+        do {
+            user = try await AccountManager(store: store).createUser(
+                username: username, password: body.password, isAdmin: true)
+        } catch {
+            return json(["error": "Could not create the account."], status: .internalServerError)
+        }
+        let token = PanelSession.newToken()
+        let userAgent = request.headers[.userAgent].map { String($0.prefix(256)) }
+        try? store.insertSession(
+            tokenHash: PanelSession.hashToken(token), userID: user.id, expiresAt: PanelSession.expiry(),
+            ip: context.clientIP, userAgent: userAgent)
+        audit(user: user.username, action: "setup.create_admin", outcome: "ok", ip: context.clientIP)
+        var response = json(["ok": true])
+        response.setCookie(sessionCookie(token: token))
+        return response
+    }
+
+    // MARK: Password reset (one-time admin-issued token)
+
+    struct ResetBody: Decodable {
+        let token: String
+        let password: String
+    }
+
+    /// The reset page. Always served (the token is validated on submit), so a
+    /// bad or expired link shows the form and a clear error rather than leaking
+    /// whether a token exists via the page itself.
+    @Sendable func resetPage(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        html(PanelAssets.string(.resetHTML))
+    }
+
+    /// Consumes a reset token and sets the new password. The token must be
+    /// unused and unexpired; on success it is marked consumed (never replayable)
+    /// and every existing session for that user is dropped, so a password reset
+    /// also evicts any session an attacker may already hold.
+    @Sendable func resetSubmit(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        guard let body = try? await request.decode(as: ResetBody.self, context: context), !body.token.isEmpty else {
+            return json(["error": "Invalid request"], status: .badRequest)
+        }
+        guard body.password.count >= 8 else {
+            return json(["error": "Password must be at least 8 characters."], status: .badRequest)
+        }
+        let now = PanelSession.timestamp()
+        let tokenHash = PanelSession.hashToken(body.token)
+        guard let userID = try? store.validPasswordReset(tokenHash: tokenHash, nowISO: now),
+            let user = try? store.user(id: userID)
+        else {
+            return json(["error": "This reset link is invalid or has expired."], status: .badRequest)
+        }
+        do {
+            try await AccountManager(store: store).setPassword(userID: userID, password: body.password)
+        } catch {
+            return json(["error": "Could not update the password."], status: .internalServerError)
+        }
+        try? store.consumePasswordReset(tokenHash: tokenHash, atISO: now)
+        try? store.deleteAllSessions(userID: userID)  // force re-authentication everywhere
+        audit(user: user.username, action: "password.reset", outcome: "ok", ip: context.clientIP)
+        return json(["ok": true])
     }
 
     @Sendable func appPage(_ request: Request, context: PanelRequestContext) async throws -> Response {
@@ -126,15 +266,31 @@ struct PanelRoutes {
         return html(PanelAssets.string(.appHTML))
     }
 
+    /// The admin SPA shell. Non-signed-in → login; signed-in-but-not-admin →
+    /// bounced back to the phone panel (the HTML itself carries no privileged
+    /// data — the admin JSON API behind it is what enforces access).
+    @Sendable func appPageAdmin(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        guard let user = context.identity else { return redirect("/login") }
+        guard user.isAdmin else { return redirect("/me") }
+        return html(PanelAssets.string(.adminHTML))
+    }
+
     /// Serves a static frontend asset with its content type. `no-cache` (i.e.
     /// revalidate every load) is deliberate: the asset filenames are NOT
     /// content-hashed (no build step), so a long cache would leave browsers on a
     /// stale panel for up to that lifetime after the app is updated. The files
     /// are tiny, so revalidation is cheap.
-    static func asset(_ asset: PanelAssets.Asset) -> Response {
-        Response(
+    static func asset(_ asset: PanelAssets.Asset, _ request: Request) -> Response {
+        let etag = PanelAssets.etag(asset)
+        // Strong validator + no-cache: the browser revalidates every load and
+        // gets a 304 when the asset is byte-identical, a fresh 200 the moment it
+        // changes — so a panel update is never masked by a stale cached bundle.
+        if request.headers[.ifNoneMatch] == etag {
+            return Response(status: .notModified, headers: [.eTag: etag, .cacheControl: "no-cache"])
+        }
+        return Response(
             status: .ok,
-            headers: [.contentType: asset.contentType, .cacheControl: "no-cache"],
+            headers: [.contentType: asset.contentType, .cacheControl: "no-cache", .eTag: etag],
             body: .init(byteBuffer: ByteBuffer(string: PanelAssets.string(asset))))
     }
 
@@ -213,6 +369,27 @@ struct PanelRoutes {
             try? store.setTOTPLastStep(userID: user.id, step: step)
         }
 
+        // Global 2FA policy for accounts that don't have their own 2FA. `force`
+        // lets them in but flags that they must enroll now; `deny_non_2fa` refuses
+        // outright. A grace exception admits the sole admin (so a freshly-set
+        // policy can never lock the only account out before it can enroll).
+        var mustEnroll2FA = false
+        let policy = (try? store.globalSettings().require2FA) ?? .off
+        if policy != .off, !totp.enabled {
+            let soleAdmin = ((try? store.listUsers())?.count ?? 0) == 1 && user.isAdmin
+            if soleAdmin {
+                mustEnroll2FA = true
+                audit(user: user.username, action: "login.2fa_grace", outcome: "ok", ip: ip)
+            } else if policy == .denyNon2FA {
+                audit(user: user.username, action: "login.2fa_denied", outcome: "denied", ip: ip)
+                return json(
+                    ["error": "This panel requires two-factor authentication. Ask an admin to enroll you."],
+                    status: .forbidden)
+            } else {
+                mustEnroll2FA = true
+            }
+        }
+
         await rateLimiter.recordSuccess(username: body.username, ip: ip)
         let token = PanelSession.newToken()
         let userAgent = request.headers[.userAgent].map { String($0.prefix(256)) }
@@ -221,7 +398,7 @@ struct PanelRoutes {
             ip: ip, userAgent: userAgent)
         audit(user: user.username, action: "login.success", outcome: "ok", ip: ip)
 
-        var response = json(["ok": true])
+        var response = json(["ok": true, "mustEnroll2FA": mustEnroll2FA])
         response.setCookie(sessionCookie(token: token))
         return response
     }
@@ -417,9 +594,25 @@ struct PanelRoutes {
         let uptime: String?
         let permissions: Permissions
         let filesAvailable: Bool
+        /// Whether the caller may manage this server's sub-users (owner or admin).
+        let canManageSubusers: Bool
         let memoryLimitBytes: Int64?
         let cpuCores: Double?
-        struct Permissions: Encodable { let view, power, files, console, schedules, lifecycle: Bool }
+        /// Why a stopped container isn't running (crash / OOM). nil while running.
+        let exit: ExitInfo?
+        /// For a running egg-server that declares a startup "done" marker:
+        /// "starting" until the marker appears (or the grace window passes),
+        /// then "online". nil when there's no marker / the state doesn't apply.
+        let startupState: String?
+        struct Permissions: Encodable { let view, power, files, console, schedules, lifecycle, backups: Bool }
+        struct ExitInfo: Encodable {
+            let crashed: Bool
+            let reason: String?
+            let exitCode: Int
+            let oomKilled: Bool
+            let restartCount: Int
+            let finishedAt: String?
+        }
     }
 
     @Sendable func apiContainerDetail(_ request: Request, context: PanelRequestContext) async throws -> Response {
@@ -429,6 +622,22 @@ struct PanelRoutes {
         guard let container = await containers.container(named: name) else { throw notFound() }
         let engine = try store.authorizationEngine(for: user)
         let limit = await containers.limits()[name]
+        // Only a non-running container gets the extra inspect for exit detail.
+        var exit: ContainerDetail.ExitInfo?
+        if !container.isRunning, let info = await containers.exitInfo(containerName: name) {
+            exit = .init(
+                crashed: info.crashed, reason: info.reason, exitCode: info.exitCode,
+                oomKilled: info.oomKilled, restartCount: info.restartCount, finishedAt: info.finishedAt)
+        }
+        // A running egg-server that declares a "done" marker gets a startup probe:
+        // scan the recent log for the marker, with an uptime fallback so a
+        // long-running server whose marker scrolled away still reads as online.
+        var startupState: String?
+        if container.isRunning, let markers = try? startupMarkers(forContainer: name), !markers.isEmpty {
+            let log = await containers.logHistory(containerName: name, tail: 250, since: nil) ?? ""
+            let uptime = await containers.startedAt(containerName: name).map { Date().timeIntervalSince($0) }
+            startupState = StartupProbe.evaluate(logText: log, doneStrings: markers, uptimeSeconds: uptime).rawValue
+        }
         audit(user: user.username, action: "container.view", container: name, outcome: "ok", ip: context.clientIP)
         return encode(
             ContainerDetail(
@@ -439,11 +648,23 @@ struct PanelRoutes {
                 permissions: .init(
                     view: engine.can(.view, containerNamed: name), power: engine.can(.power, containerNamed: name),
                     files: engine.can(.files, containerNamed: name), console: engine.can(.console, containerNamed: name),
-                    schedules: engine.can(.schedules, containerNamed: name), lifecycle: engine.can(.lifecycle, containerNamed: name)
+                    schedules: engine.can(.schedules, containerNamed: name), lifecycle: engine.can(.lifecycle, containerNamed: name),
+                    backups: engine.can(.backups, containerNamed: name)
                 ),
                 filesAvailable: await containers.fileService(containerName: name) != nil,
-                memoryLimitBytes: limit?.memoryBytes, cpuCores: limit?.cpuCores
+                canManageSubusers: canManageSubUsers(user, serverName: name),
+                memoryLimitBytes: limit?.memoryBytes, cpuCores: limit?.cpuCores,
+                exit: exit, startupState: startupState
             ))
+    }
+
+    /// The egg's `config.startup.done` markers for a provisioned server, or nil
+    /// if the container isn't a provisioned server / its egg has none.
+    private func startupMarkers(forContainer name: String) throws -> [String]? {
+        guard let record = try store.serverRecord(name: name), let eggID = record.eggID,
+            let egg = try store.egg(id: eggID)
+        else { return nil }
+        return (try? egg.parsed().doneStrings)?.filter { !$0.isEmpty }
     }
 
     // MARK: Power
@@ -777,16 +998,31 @@ struct PanelRoutes {
         let weekdays: [Int]
         let description: String
         let lastRun: LastRun?
+        /// The ordered task chain (empty = the implicit single restart).
+        let tasks: [TaskDTO]
         struct LastRun: Encodable {
             let date: String
             let outcome: String
             let message: String
+        }
+        struct TaskDTO: Encodable {
+            let action: String
+            let payload: String
+            let offsetSeconds: Int
         }
     }
     struct ScheduleBody: Decodable {
         let hour: Int
         let minute: Int
         let weekdays: [Int]?
+        /// Optional ordered task chain. nil leaves tasks unchanged is NOT the
+        /// contract — the editor always sends the full list; nil clears it.
+        let tasks: [TaskInput]?
+        struct TaskInput: Decodable {
+            let action: String
+            let payload: String?
+            let offsetSeconds: Int?
+        }
     }
 
     @Sendable func apiScheduleGet(_ request: Request, context: PanelRequestContext) async throws -> Response {
@@ -795,10 +1031,14 @@ struct PanelRoutes {
         guard let (schedule, last) = await containers.schedule(containerName: name) else {
             return encode(["schedule": Optional<ScheduleDTO>.none])
         }
+        let tasks = ((try? store.scheduleTasks(containerName: name)) ?? []).map {
+            ScheduleDTO.TaskDTO(action: $0.action.rawValue, payload: $0.payload, offsetSeconds: $0.offsetSeconds)
+        }
         let dto = ScheduleDTO(
             hour: schedule.hour, minute: schedule.minute, weekdays: schedule.weekdays.sorted(),
             description: schedule.timeDescription,
-            lastRun: last.map { .init(date: PanelSession.timestamp($0.date), outcome: outcomeString($0.outcome), message: $0.message) }
+            lastRun: last.map { .init(date: PanelSession.timestamp($0.date), outcome: outcomeString($0.outcome), message: $0.message) },
+            tasks: tasks
         )
         return encode(["schedule": dto])
     }
@@ -812,13 +1052,30 @@ struct PanelRoutes {
         else {
             return json(["error": "hour 0–23 and minute 0–59 required"], status: .badRequest)
         }
+        // Validate the task chain (if any) BEFORE writing the schedule, so a bad
+        // task never leaves a schedule with a half-applied chain.
+        var validatedTasks: [ScheduleTask] = []
+        for (index, input) in (body.tasks ?? []).enumerated() {
+            guard let action = ScheduleTask.Action(rawValue: input.action),
+                let task = ScheduleTask(
+                    seq: index, action: action, payload: input.payload ?? "",
+                    offsetSeconds: input.offsetSeconds ?? 0
+                ).validated()
+            else {
+                return json(["error": "task \(index + 1) is invalid (check its action, payload, and offset)"], status: .badRequest)
+            }
+            validatedTasks.append(task)
+        }
         do {
             try await containers.setSchedule(
                 containerName: name, hour: body.hour, minute: body.minute,
                 weekdays: Set(body.weekdays ?? []))
+            try store.setScheduleTasks(containerName: name, tasks: validatedTasks)
             audit(
                 user: user.username, action: "container.schedules", container: name, outcome: "ok",
-                ip: context.clientIP, detail: "set \(String(format: "%02d:%02d", body.hour, body.minute))")
+                ip: context.clientIP,
+                detail: "set \(String(format: "%02d:%02d", body.hour, body.minute))"
+                    + (validatedTasks.isEmpty ? "" : " with \(validatedTasks.count) task(s)"))
             return json(["ok": true])
         } catch {
             audit(
@@ -848,6 +1105,7 @@ struct PanelRoutes {
         case .success: "ok"
         case .failed: "failed"
         case .timedOut: "timedOut"
+        case .missed: "missed"
         }
     }
 
@@ -872,6 +1130,120 @@ struct PanelRoutes {
     struct ConsoleResult: Encodable {
         let command, output: String
         let isError: Bool
+    }
+
+    struct ConsoleInputBody: Decodable { let line: String }
+
+    /// Sends one line to a running server's stdin (the interactive console). The
+    /// output appears in the live log stream, so this only acknowledges delivery.
+    @Sendable func apiConsoleInput(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let body = try? await request.decode(as: ConsoleInputBody.self, context: context) else {
+            return json(["error": "line required"], status: .badRequest)
+        }
+        let ok = await containers.consoleSend(containerName: name, line: body.line)
+        audit(
+            user: user.username, action: "container.console", container: name,
+            outcome: ok ? "ok" : "error", ip: context.clientIP, detail: body.line)
+        guard ok else {
+            return json(["error": "The server isn't running, so the console can't accept input."], status: .conflict)
+        }
+        return json(["ok": true])
+    }
+
+    // MARK: Backups
+
+    static let maxBackupsPerServer = 20
+
+    struct BackupDTO: Encodable {
+        let id: Int64
+        let uuid: String
+        let name: String?
+        let bytes: Int64
+        let createdAt: String
+        init(_ b: BackupRecord) {
+            id = b.id
+            uuid = b.uuid
+            name = b.name
+            bytes = b.bytes
+            createdAt = b.createdAt
+        }
+    }
+    struct BackupCreateBody: Decodable { let name: String? }
+
+    @Sendable func apiBackupsList(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        _ = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        return encode((try store.listBackups(containerName: name)).map(BackupDTO.init))
+    }
+
+    @Sendable func apiBackupCreate(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard try store.backupCount(containerName: name) < Self.maxBackupsPerServer else {
+            return json(["error": "Backup limit reached (\(Self.maxBackupsPerServer)). Delete one first."], status: .conflict)
+        }
+        let body = try? await request.decode(as: BackupCreateBody.self, context: context)
+        do {
+            guard let made = try await containers.createBackup(containerName: name) else { throw notFound() }
+            try store.recordBackup(
+                containerName: name, uuid: made.uuid, name: body?.name, fileName: made.fileName,
+                bytes: made.bytes, checksum: nil)
+            audit(user: user.username, action: "container.backups", container: name, outcome: "ok", ip: context.clientIP, detail: "create")
+            return encode(
+                BackupDTO(
+                    try store.backup(uuid: made.uuid)
+                        ?? BackupRecord(
+                            id: 0, containerName: name, uuid: made.uuid, name: body?.name, fileName: made.fileName, bytes: made.bytes,
+                            checksum: nil, createdAt: "")))
+        } catch {
+            audit(
+                user: user.username, action: "container.backups", container: name, outcome: "error", ip: context.clientIP,
+                detail: "\(error)")
+            return json(["error": "Backup failed: \(error)"], status: .internalServerError)
+        }
+    }
+
+    @Sendable func apiBackupDownload(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        _ = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let uuid = request.uri.queryParameters["uuid"].map(String.init),
+            let backup = try store.backup(uuid: uuid), backup.containerName == name,
+            let url = await containers.backupFileURL(containerName: name, fileName: backup.fileName)
+        else { throw notFound() }
+        let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.intValue ?? 0
+        return Self.fileDownloadResponse(url: url, size: size)
+    }
+
+    @Sendable func apiBackupRestore(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let uuid = request.uri.queryParameters["uuid"].map(String.init),
+            let backup = try store.backup(uuid: uuid), backup.containerName == name
+        else { throw notFound() }
+        do {
+            try await containers.restoreBackup(containerName: name, fileName: backup.fileName)
+            audit(user: user.username, action: "container.backups", container: name, outcome: "ok", ip: context.clientIP, detail: "restore")
+            return json(["ok": true])
+        } catch {
+            audit(
+                user: user.username, action: "container.backups", container: name, outcome: "error", ip: context.clientIP,
+                detail: "restore: \(error)")
+            return json(["error": "Restore failed: \(error)"], status: .internalServerError)
+        }
+    }
+
+    @Sendable func apiBackupDelete(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let user = try context.requireIdentity()
+        let name = try context.parameters.require("name")
+        guard let uuid = request.uri.queryParameters["uuid"].map(String.init),
+            let backup = try store.backup(uuid: uuid), backup.containerName == name
+        else { throw notFound() }
+        try? await containers.deleteBackupFile(containerName: name, fileName: backup.fileName)
+        try store.deleteBackup(uuid: uuid)
+        audit(user: user.username, action: "container.backups", container: name, outcome: "ok", ip: context.clientIP, detail: "delete")
+        return json(["ok": true])
     }
 
     // MARK: Files
@@ -939,6 +1311,72 @@ struct PanelRoutes {
     }
 
     struct MkdirBody: Decodable { let path: String }
+    struct FilePullBody: Decodable {
+        let url: String
+        let path: String
+    }
+
+    struct CompressBody: Decodable {
+        let paths: [String]
+        let archive: String
+    }
+    struct DecompressBody: Decodable {
+        let archive: String
+        let into: String
+    }
+
+    @Sendable func apiFileCompress(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let (name, service) = try await fileService(context)
+        guard let body = try? await request.decode(as: CompressBody.self, context: context),
+            !body.paths.isEmpty, !body.archive.isEmpty
+        else { return json(["error": "paths and archive required"], status: .badRequest) }
+        do {
+            try await service.compress(body.paths, to: body.archive)
+            audit(
+                user: try context.requireIdentity().username, action: "container.files", container: name,
+                outcome: "ok", ip: context.clientIP, detail: "compress \(body.archive)")
+            return json(["ok": true])
+        } catch {
+            return fileError(
+                error, user: try context.requireIdentity().username, container: name, ip: context.clientIP,
+                detail: "compress")
+        }
+    }
+
+    @Sendable func apiFileDecompress(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let (name, service) = try await fileService(context)
+        guard let body = try? await request.decode(as: DecompressBody.self, context: context), !body.archive.isEmpty
+        else { return json(["error": "archive required"], status: .badRequest) }
+        do {
+            try await service.decompress(body.archive, into: body.into)
+            audit(
+                user: try context.requireIdentity().username, action: "container.files", container: name,
+                outcome: "ok", ip: context.clientIP, detail: "decompress \(body.archive)")
+            return json(["ok": true])
+        } catch {
+            return fileError(
+                error, user: try context.requireIdentity().username, container: name, ip: context.clientIP,
+                detail: "decompress")
+        }
+    }
+
+    @Sendable func apiFilePull(_ request: Request, context: PanelRequestContext) async throws -> Response {
+        let (name, service) = try await fileService(context)
+        guard let body = try? await request.decode(as: FilePullBody.self, context: context),
+            !body.url.isEmpty, !body.path.isEmpty
+        else { return json(["error": "url and path required"], status: .badRequest) }
+        do {
+            try await service.pull(from: body.url, to: body.path)
+            audit(
+                user: try context.requireIdentity().username, action: "container.files", container: name,
+                outcome: "ok", ip: context.clientIP, detail: "pull \(body.path)")
+            return json(["ok": true])
+        } catch {
+            return fileError(
+                error, user: try context.requireIdentity().username, container: name, ip: context.clientIP,
+                detail: "pull \(body.path)")
+        }
+    }
 
     @Sendable func apiFileMkdir(_ request: Request, context: PanelRequestContext) async throws -> Response {
         let (name, service) = try await fileService(context)
@@ -1121,9 +1559,9 @@ struct PanelRoutes {
     /// A bare 404 with no body — identical whether it comes from the scope
     /// middleware (ungranted) or a handler (genuinely nonexistent), so the two
     /// cases are indistinguishable to the caller.
-    private func notFound() -> HTTPError { HTTPError(.notFound) }
+    func notFound() -> HTTPError { HTTPError(.notFound) }
 
-    private func audit(user: String, action: String, container: String? = nil, outcome: String, ip: String, detail: String? = nil) {
+    func audit(user: String, action: String, container: String? = nil, outcome: String, ip: String, detail: String? = nil) {
         try? store.recordAudit(
             username: user, action: action, containerName: container,
             outcome: outcome, sourceIP: ip, detail: detail)
@@ -1146,17 +1584,17 @@ struct PanelRoutes {
             secure: secureCookies, httpOnly: true, sameSite: .lax)
     }
 
-    private func redirect(_ location: String) -> Response {
+    func redirect(_ location: String) -> Response {
         Response(status: .seeOther, headers: [.location: location])
     }
 
-    private func html(_ body: String) -> Response {
+    func html(_ body: String) -> Response {
         Response(
             status: .ok, headers: [.contentType: "text/html; charset=utf-8"],
             body: .init(byteBuffer: ByteBuffer(string: body)))
     }
 
-    private func json(_ object: [String: some Encodable & Sendable], status: HTTPResponse.Status = .ok) -> Response {
+    func json(_ object: [String: some Encodable & Sendable], status: HTTPResponse.Status = .ok) -> Response {
         let data = (try? JSONSerialization.data(withJSONObject: object.mapValues { anyify($0) })) ?? Data("{}".utf8)
         return Response(
             status: status, headers: [.contentType: "application/json"],
@@ -1169,7 +1607,7 @@ struct PanelRoutes {
         return String(describing: value)
     }
 
-    private func encode(_ value: some Encodable, status: HTTPResponse.Status = .ok) -> Response {
+    func encode(_ value: some Encodable, status: HTTPResponse.Status = .ok) -> Response {
         let data = (try? JSONEncoder().encode(value)) ?? Data("{}".utf8)
         return Response(
             status: status, headers: [.contentType: "application/json"],

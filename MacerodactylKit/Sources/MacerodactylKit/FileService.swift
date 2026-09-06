@@ -1,5 +1,10 @@
 import Foundation
 
+// On Linux, URLSession lives in FoundationNetworking (split out of Foundation).
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+
 public enum FileServiceError: Error, Equatable, Sendable {
     case notFound
     case isDirectory
@@ -192,6 +197,93 @@ public struct FileService: Sendable {
             }
         }
         try atomicWrite(data, to: url)
+    }
+
+    /// Downloads a remote file directly into the tree — how you install a jar or
+    /// modpack without uploading gigabytes from your laptop. http(s) only,
+    /// streamed to a temp file (never all into memory), size-capped, and the
+    /// destination is confined like every other write.
+    public func pull(from urlString: String, to relativePath: String, maxBytes: Int = maxUploadBytes) async throws {
+        guard let url = URL(string: urlString), let scheme = url.scheme?.lowercased(),
+            scheme == "http" || scheme == "https"
+        else { throw FileServiceError.invalidPath }
+        let dest = try resolve(relativePath)
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: dest.path, isDirectory: &isDir), isDir.boolValue {
+            throw FileServiceError.isDirectory
+        }
+        let (tempURL, response) = try await URLSession.shared.download(from: url)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw FileServiceError.io("download failed (HTTP \(http.statusCode))")
+        }
+        let size = ((try? FileManager.default.attributesOfItem(atPath: tempURL.path))?[.size] as? NSNumber)?.intValue ?? 0
+        guard size <= maxBytes else { throw FileServiceError.tooLarge(actualBytes: size, limitBytes: maxBytes) }
+        let parent = dest.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: parent.path) {
+            try? FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        }
+        try? FileManager.default.removeItem(at: dest)
+        do {
+            try FileManager.default.copyItem(at: tempURL, to: dest)
+        } catch {
+            throw FileServiceError.io(error.localizedDescription)
+        }
+    }
+
+    /// Compresses one or more in-tree paths into a `.tar.gz` archive within the
+    /// tree — how you snapshot a world/plugins folder for download. Paths and the
+    /// archive destination are all confined.
+    public func compress(_ relativePaths: [String], to archiveRelative: String) async throws {
+        guard !relativePaths.isEmpty else { throw FileServiceError.invalidPath }
+        let archive = try resolve(archiveRelative)
+        // Validate every source path is in-tree; pass the relative names to tar
+        // (with -C root) so the archive stores clean relative paths.
+        for path in relativePaths { _ = try resolve(path) }
+        let names = relativePaths.map { $0.hasPrefix("/") ? String($0.dropFirst()) : $0 }
+        try await Self.runTool(Self.tarPath, ["czf", archive.path, "-C", root.path] + names)
+    }
+
+    /// Extracts a `.tar.gz`/`.tgz`/`.tar` or `.zip` archive into an in-tree
+    /// directory. `tar`/`unzip` strip absolute and `..` entries, so extraction
+    /// stays within the destination.
+    public func decompress(_ archiveRelative: String, into dirRelative: String) async throws {
+        let archive = try resolve(archiveRelative)
+        guard FileManager.default.fileExists(atPath: archive.path) else { throw FileServiceError.notFound }
+        let dest = try resolve(dirRelative)
+        try? FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        let lower = archive.path.lowercased()
+        if lower.hasSuffix(".zip") {
+            try await Self.runTool(Self.unzipPath, ["-o", "-q", archive.path, "-d", dest.path])
+        } else {
+            try await Self.runTool(Self.tarPath, ["xzf", archive.path, "-C", dest.path])
+        }
+    }
+
+    /// tar/unzip locations that exist on both macOS and the Linux panel image.
+    static let tarPath: String = FileManager.default.isExecutableFile(atPath: "/usr/bin/tar") ? "/usr/bin/tar" : "/bin/tar"
+    static let unzipPath = "/usr/bin/unzip"
+
+    /// Runs a bundled archive tool, throwing a file error on non-zero exit.
+    private static func runTool(_ executable: String, _ arguments: [String]) async throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.environment = ["PATH": "/usr/bin:/bin"]
+        let errPipe = Pipe()
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = errPipe
+        do {
+            try process.run()
+        } catch {
+            throw FileServiceError.io("archive tool unavailable: \(error.localizedDescription)")
+        }
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let message = String(decoding: errData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            throw FileServiceError.io(message.isEmpty ? "archive failed" : message)
+        }
     }
 
     /// Atomic write: temp file beside the target, fsync, then swap into place —

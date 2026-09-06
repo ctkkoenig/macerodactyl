@@ -45,6 +45,9 @@ public enum ScheduleOutcome: Sendable, Equatable {
     /// Desktop socket makes `docker restart` block forever, which would
     /// otherwise be the silent-failure case. Distinct from `failed`.
     case timedOut
+    /// The fire never happened — the in-process scheduler wasn't running at the
+    /// scheduled time (the daemon was down). Surfaced, never silently swallowed.
+    case missed
 }
 
 /// Outcome of the most recent scheduled run, reconstructed from the log files
@@ -56,6 +59,12 @@ public struct ScheduleRunResult: Sendable, Equatable {
     public let date: Date
     public let outcome: ScheduleOutcome
     public let message: String
+
+    public init(date: Date, outcome: ScheduleOutcome, message: String) {
+        self.date = date
+        self.outcome = outcome
+        self.message = message
+    }
 
     public var succeeded: Bool { outcome == .success }
 }

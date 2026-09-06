@@ -108,6 +108,22 @@ struct ContainerScopeMiddleware: RouterMiddleware {
                 containerName: name, outcome: "denied", sourceIP: context.clientIP)
             throw HTTPError(.forbidden)
         }
+        // Suspension gate: a suspended server is fully read-only for everyone
+        // except an admin (who needs to manage/unsuspend it). This keys on the
+        // HTTP METHOD, not the permission mapping — routes like subusers and
+        // allocations require only `view`, but a mutation on them (e.g. adding an
+        // allocation, which recreates and would RESTART the stopped container)
+        // must still be frozen. Any non-idempotent method is blocked; GETs pass.
+        let mutating: Set<HTTPRequest.Method> = [.post, .put, .patch, .delete]
+        if mutating.contains(request.method), !user.isAdmin {
+            let record = (try? store.serverRecord(name: name)) ?? nil
+            if record?.status == "suspended" {
+                try? store.recordAudit(
+                    username: user.username, action: auditAction(for: required),
+                    containerName: name, outcome: "denied", sourceIP: context.clientIP, detail: "suspended")
+                throw HTTPError(.forbidden)
+            }
+        }
         return try await next(request, context)
     }
 
@@ -128,6 +144,7 @@ struct ContainerScopeMiddleware: RouterMiddleware {
         case "schedule": return .schedules
         case "console": return .console
         case "power": return .power
+        case "backups": return .backups
         case "pull", "recreate", "remove", "compose": return .lifecycle
         default: return .view  // detail, logs, stats, metrics
         }
@@ -141,6 +158,7 @@ struct ContainerScopeMiddleware: RouterMiddleware {
         case .console: "container.console"
         case .schedules: "container.schedules"
         case .lifecycle: "container.lifecycle"
+        case .backups: "container.backups"
         }
     }
 }

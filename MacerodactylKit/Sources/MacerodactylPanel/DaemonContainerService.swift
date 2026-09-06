@@ -9,10 +9,17 @@ import MacerodactylKit
 public struct DaemonContainerService: ContainerService {
     let cli: DockerCLI
     let stacksRoot: URL
+    /// When set, scheduled restarts are DB-backed (the server deploy, where
+    /// launchd does not exist and macerodactyld's in-process cron loop reads the
+    /// same rows). When nil, schedules fall back to launchd (macOS-side tools).
+    let store: PanelDataStore?
+    /// Shared across requests so one attach session per container is reused.
+    let consoleHub = ConsoleHub()
 
-    public init(cli: DockerCLI, stacksRoot: URL) {
+    public init(cli: DockerCLI, stacksRoot: URL, store: PanelDataStore? = nil) {
         self.cli = cli
         self.stacksRoot = stacksRoot
+        self.store = store
     }
 
     /// All containers (including stopped), grouped so the app's own container is
@@ -74,6 +81,11 @@ public struct DaemonContainerService: ContainerService {
         }
     }
 
+    public func consoleSend(containerName: String, line: String) async -> Bool {
+        guard let container = await container(named: containerName), container.isRunning else { return false }
+        return await consoleHub.send(cli: cli, containerID: container.id, line: line)
+    }
+
     public func fileService(containerName: String) async -> FileService? {
         guard let container = await container(named: containerName) else { return nil }
         return FileService(container: container, stacksRoot: stacksRoot)
@@ -87,12 +99,35 @@ public struct DaemonContainerService: ContainerService {
         await cli.containerLimits(ids: await fetchAll().map(\.id))
     }
 
+    public func exitInfo(containerName: String) async -> ContainerExitInfo? {
+        guard let container = await container(named: containerName) else { return nil }
+        return await cli.inspectState(containerID: container.id)
+    }
+
+    public func startedAt(containerName: String) async -> Date? {
+        guard let container = await container(named: containerName) else { return nil }
+        return await cli.startedAt(containerID: container.id)
+    }
+
+    public func executeDatabaseSQL(_ sql: String, engine: DatabaseEngineConfig) async throws {
+        let service = ManagedDatabaseService(cli: cli)
+        try await service.ensureRunning(config: engine)
+        try await service.runSQL(config: engine, sql: sql)
+    }
+
     public func statsStream(containerName: String) async -> AsyncThrowingStream<ContainerStats, Error>? {
         guard let container = await container(named: containerName), container.isRunning else { return nil }
         return cli.statsStream(containerID: container.id)
     }
 
     public func schedule(containerName: String) async -> (RestartSchedule, ScheduleRunResult?)? {
+        // DB-backed on the server; launchd only when no store is wired.
+        if let store {
+            guard let row = try? store.schedule(containerName: containerName) else { return nil }
+            let schedule = RestartSchedule(
+                containerName: row.containerName, hour: row.hour, minute: row.minute, weekdays: row.weekdays)
+            return (schedule, Self.runResult(from: row))
+        }
         guard let service = try? ScheduleService(dockerPath: cli.binary.path),
             let schedule = service.schedule(forContainerName: containerName)
         else { return nil }
@@ -100,13 +135,38 @@ public struct DaemonContainerService: ContainerService {
     }
 
     public func setSchedule(containerName: String, hour: Int, minute: Int, weekdays: Set<Int>) async throws {
+        if let store {
+            try store.upsertSchedule(containerName: containerName, hour: hour, minute: minute, weekdays: weekdays)
+            return
+        }
         let service = try ScheduleService(dockerPath: cli.binary.path)
         try service.install(RestartSchedule(containerName: containerName, hour: hour, minute: minute, weekdays: weekdays))
     }
 
     public func removeSchedule(containerName: String) async throws {
+        if let store {
+            try store.deleteSchedule(containerName: containerName)
+            return
+        }
         let service = try ScheduleService(dockerPath: cli.binary.path)
         try service.remove(containerName: containerName)
+    }
+
+    /// Reconstructs a `ScheduleRunResult` from a persisted schedule's last-run
+    /// columns so the web contract (last run date/outcome/message) is unchanged.
+    private static func runResult(from row: PanelDataStore.PersistedSchedule) -> ScheduleRunResult? {
+        guard let iso = row.lastRunAt else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = formatter.date(from: iso) ?? ISO8601DateFormatter().date(from: iso) ?? Date(timeIntervalSince1970: 0)
+        let outcome: ScheduleOutcome =
+            switch row.lastOutcome {
+            case "ok": .success
+            case "timedOut": .timedOut
+            case "missed": .missed
+            default: .failed
+            }
+        return ScheduleRunResult(date: date, outcome: outcome, message: row.lastMessage ?? "")
     }
 
     public func dockerReachable() async -> Bool {
@@ -133,6 +193,58 @@ public struct DaemonContainerService: ContainerService {
         try await ContainerLifecycle.remove(cli: cli, container: container)
     }
 
+    private func stackDir(for name: String) async -> URL? {
+        guard let container = await container(named: name), let wd = container.composeWorkingDir, !wd.isEmpty
+        else { return nil }
+        return URL(fileURLWithPath: wd)
+    }
+
+    public func createBackup(containerName: String) async throws -> BackupService.CreatedBackup? {
+        guard let dir = await stackDir(for: containerName) else { return nil }
+        return try await BackupService.create(cli: cli, stackDir: dir, dataDirName: "data")
+    }
+
+    public func restoreBackup(containerName: String, fileName: String) async throws {
+        guard let dir = await stackDir(for: containerName) else { throw ContainerServiceError.notFound }
+        if let container = await container(named: containerName), container.isRunning {
+            try? await power(.stop, containerName: containerName)
+        }
+        try await BackupService.restore(cli: cli, stackDir: dir, dataDirName: "data", fileName: fileName)
+    }
+
+    public func deleteBackupFile(containerName: String, fileName: String) async throws {
+        guard let dir = await stackDir(for: containerName) else { return }
+        try BackupService.delete(stackDir: dir, fileName: fileName)
+    }
+
+    public func backupFileURL(containerName: String, fileName: String) async -> URL? {
+        guard let dir = await stackDir(for: containerName) else { return nil }
+        return BackupService.fileURL(stackDir: dir, fileName: fileName)
+    }
+
     public func imagePrune() async throws -> String { try await ContainerLifecycle.imagePrune(cli: cli) }
     public func diskUsage() async throws -> String { try await ContainerLifecycle.diskUsage(cli: cli) }
+
+    public func provision(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        ServerProvisioner(cli: cli, stacksRoot: stacksRoot).provision(spec)
+    }
+
+    public func reconfigure(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        ServerProvisioner(cli: cli, stacksRoot: stacksRoot).reconfigure(spec)
+    }
+
+    public func reinstall(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        if let container = await container(named: spec.name), container.isRunning {
+            try? await power(.stop, containerName: spec.name)
+        }
+        return ServerProvisioner(cli: cli, stacksRoot: stacksRoot).reinstall(spec)
+    }
+
+    public func deprovision(name: String) async throws {
+        try await ServerProvisioner(cli: cli, stacksRoot: stacksRoot).deprovision(name: name)
+    }
+
+    public func stackExists(name: String) async -> Bool {
+        FileManager.default.fileExists(atPath: stacksRoot.appendingPathComponent(name).path)
+    }
 }

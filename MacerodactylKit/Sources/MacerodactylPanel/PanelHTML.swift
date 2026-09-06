@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 
 /// The web panel's frontend is a set of static files in the bundle
@@ -14,16 +15,23 @@ enum PanelAssets {
     enum Asset: String, CaseIterable {
         case appHTML = "app.html"
         case loginHTML = "login.html"
+        case adminHTML = "admin.html"
+        case setupHTML = "setup.html"
+        case resetHTML = "reset.html"
         case panelCSS = "panel.css"
         case loginCSS = "login.css"
+        case adminCSS = "admin.css"
         case panelJS = "panel.js"
         case loginJS = "login.js"
+        case adminJS = "admin.js"
+        case setupJS = "setup.js"
+        case resetJS = "reset.js"
 
         var contentType: String {
             switch self {
-            case .appHTML, .loginHTML: "text/html; charset=utf-8"
-            case .panelCSS, .loginCSS: "text/css; charset=utf-8"
-            case .panelJS, .loginJS: "application/javascript; charset=utf-8"
+            case .appHTML, .loginHTML, .adminHTML, .setupHTML, .resetHTML: "text/html; charset=utf-8"
+            case .panelCSS, .loginCSS, .adminCSS: "text/css; charset=utf-8"
+            case .panelJS, .loginJS, .adminJS, .setupJS, .resetJS: "application/javascript; charset=utf-8"
             }
         }
     }
@@ -33,6 +41,7 @@ enum PanelAssets {
     private final class Cache: @unchecked Sendable {
         private let lock = NSLock()
         private var store: [Asset: String] = [:]
+        private var etags: [Asset: String] = [:]
         func value(for asset: Asset) -> String {
             lock.lock()
             defer { lock.unlock() }
@@ -40,6 +49,26 @@ enum PanelAssets {
             let loaded = Self.load(asset)
             store[asset] = loaded
             return loaded
+        }
+        /// A strong content validator (quoted hex SHA-256) so `no-cache`
+        /// revalidation is deterministic — a changed asset always busts the
+        /// browser cache, an unchanged one 304s. Computed once per asset.
+        func etag(for asset: Asset) -> String {
+            lock.lock()
+            defer { lock.unlock() }
+            if let hit = etags[asset] { return hit }
+            let text: String
+            if let cached = store[asset] {
+                text = cached
+            } else {
+                text = Self.load(asset)
+                store[asset] = text
+            }
+            let digest = SHA256.hash(data: Data(text.utf8))
+            let hex = digest.map { String(format: "%02x", $0) }.joined()
+            let tag = "\"\(hex.prefix(16))\""
+            etags[asset] = tag
+            return tag
         }
         private static func load(_ asset: Asset) -> String {
             guard let url = Bundle.module.url(forResource: asset.rawValue, withExtension: nil, subdirectory: "panel"),
@@ -50,4 +79,5 @@ enum PanelAssets {
     }
 
     static func string(_ asset: Asset) -> String { cache.value(for: asset) }
+    static func etag(_ asset: Asset) -> String { cache.etag(for: asset) }
 }

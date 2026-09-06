@@ -19,6 +19,25 @@ public struct DockerCLI: Sendable {
         self.binary = binary
     }
 
+    /// The PATH handed to every docker process. Docker's credential helpers
+    /// (`docker-credential-desktop`, `-osxkeychain`, …) live alongside the docker
+    /// binary and are invoked during `pull`/`compose up` when a `credsStore` is
+    /// configured — so the binary's own directory must be on PATH or every image
+    /// pull fails with "docker-credential-…: executable file not found". We keep
+    /// the environment otherwise minimal (no inherited shell PATH).
+    var processPath: String {
+        let binDir = binary.deletingLastPathComponent().path
+        var dirs = [binDir, "/usr/local/bin", "/usr/bin", "/bin"]
+        // De-dup while preserving order.
+        var seen = Set<String>()
+        dirs = dirs.filter { seen.insert($0).inserted }
+        return dirs.joined(separator: ":")
+    }
+
+    private var processEnvironment: [String: String] {
+        ["HOME": FileManager.default.homeDirectoryForCurrentUser.path, "PATH": processPath]
+    }
+
     public struct CommandResult: Sendable {
         public let stdout: String
         public let stderr: String
@@ -43,11 +62,9 @@ public struct DockerCLI: Sendable {
         let process = Process()
         process.executableURL = binary
         process.arguments = args
-        // A minimal, controlled environment; docker needs HOME to find its config.
-        process.environment = [
-            "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
-            "PATH": "/usr/bin:/bin",
-        ]
+        // A minimal, controlled environment; docker needs HOME to find its config
+        // and PATH to find its credential helpers (see `processPath`).
+        process.environment = processEnvironment
 
         let outPipe = Pipe()
         let errPipe = Pipe()
@@ -81,14 +98,12 @@ public struct DockerCLI: Sendable {
     /// which write their progress to stderr, not stdout.
     public func streamLines(_ args: [String], mergeStderr: Bool = false) -> AsyncThrowingStream<String, Error> {
         let binary = self.binary
+        let environment = processEnvironment
         return AsyncThrowingStream { continuation in
             let process = Process()
             process.executableURL = binary
             process.arguments = args
-            process.environment = [
-                "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
-                "PATH": "/usr/bin:/bin",
-            ]
+            process.environment = environment
             let outPipe = Pipe()
             let errPipe = Pipe()
             process.standardOutput = outPipe
@@ -162,6 +177,63 @@ public struct DockerCLI: Sendable {
         }
     }
 
+    /// Attaches to a running container's process (`docker attach`), returning a
+    /// live session: an output line stream (stdout+stderr) plus a writable stdin
+    /// so a console can send commands to the server's own process. Requires the
+    /// container to have been started with stdin open (see ComposeFileWriter).
+    /// Teardown mirrors `streamLines`: cancelling the output stream, or calling
+    /// `close()`, terminates the docker process. `--sig-proxy=false` keeps host
+    /// signals from being forwarded to the container.
+    public func attach(containerID: String) -> AttachSession {
+        let process = Process()
+        process.executableURL = binary
+        process.arguments = ["attach", "--sig-proxy=false", containerID]
+        process.environment = processEnvironment
+        let inPipe = Pipe()
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardInput = inPipe
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+
+        let stream = AsyncThrowingStream<String, Error> { continuation in
+            let outBox = DataBox()
+            let errBox = DataBox()
+            outPipe.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                    if let last = outBox.drainRemainder() { continuation.yield(last) }
+                    return
+                }
+                for line in outBox.appendAndSplitLines(chunk) { continuation.yield(line) }
+            }
+            errPipe.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                    if let last = errBox.drainRemainder() { continuation.yield(last) }
+                    return
+                }
+                for line in errBox.appendAndSplitLines(chunk) { continuation.yield(line) }
+            }
+            process.terminationHandler = { _ in
+                outPipe.fileHandleForReading.readabilityHandler = nil
+                errPipe.fileHandleForReading.readabilityHandler = nil
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                if process.isRunning { process.terminate() }
+            }
+            do {
+                try process.run()
+            } catch {
+                continuation.finish(throwing: DockerError.launchFailed(String(describing: error)))
+            }
+        }
+        return AttachSession(process: process, stdin: inPipe.fileHandleForWriting, lines: stream)
+    }
+
     /// One-shot stats for all running containers in a single process
     /// (`docker stats --no-stream`). Cheaper than per-container polling; used
     /// for the landing cards on a slow cadence. Returns only real readings.
@@ -210,6 +282,19 @@ public struct DockerCLI: Sendable {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.date(from: trimmed) ?? ISO8601DateFormatter().date(from: trimmed)
+    }
+
+    /// The last-exit detail for a container (exit code, OOM kill, engine error,
+    /// restart count, finish time) — the inspect-only fields the `ps` status
+    /// string can't express. nil if the container is gone or inspect fails.
+    public func inspectState(containerID: String) async -> ContainerExitInfo? {
+        // RestartCount is a sibling of .State; emit it, a tab, then .State JSON.
+        guard
+            let output = try? await run(
+                ["inspect", "--format", #"{{.RestartCount}}{{"\t"}}{{json .State}}"#, containerID],
+                timeout: .seconds(10))
+        else { return nil }
+        return ContainerExitInfo.parse(inspectOutput: output)
     }
 
     /// True if `docker compose version` succeeds (the plugin is installed).
@@ -274,6 +359,47 @@ public struct DockerCLI: Sendable {
             group.cancelAll()
             return first
         }
+    }
+}
+
+/// A live `docker attach` session — the output line stream plus a writable
+/// stdin. Writing after the process ends (or after `close()`) is a safe no-op.
+public final class AttachSession: @unchecked Sendable {
+    public let lines: AsyncThrowingStream<String, Error>
+    private let process: Process
+    private let stdin: FileHandle
+    private let lock = NSLock()
+    private var closed = false
+
+    init(process: Process, stdin: FileHandle, lines: AsyncThrowingStream<String, Error>) {
+        self.process = process
+        self.stdin = stdin
+        self.lines = lines
+    }
+
+    /// Sends one line to the container's stdin (a newline is appended if absent).
+    public func write(_ text: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, process.isRunning else { return }
+        let line = text.hasSuffix("\n") ? text : text + "\n"
+        // A broken pipe (process gone) must not crash — swallow the write error.
+        try? stdin.write(contentsOf: Data(line.utf8))
+    }
+
+    public func close() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed else { return }
+        closed = true
+        try? stdin.close()
+        if process.isRunning { process.terminate() }
+    }
+
+    public var isRunning: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !closed && process.isRunning
     }
 }
 

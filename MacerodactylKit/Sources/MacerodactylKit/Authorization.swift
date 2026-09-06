@@ -11,6 +11,8 @@ public enum ContainerPermission: String, CaseIterable, Sendable, Codable {
     /// recreate the container, remove it. Deliberately separate from `power` so
     /// "can restart" never implies "can destroy".
     case lifecycle
+    /// Create/download/restore/delete backups of this container's data.
+    case backups
 }
 
 /// Per-container grant for one user. Keyed by container *name*: compose
@@ -25,10 +27,12 @@ public struct ContainerGrant: Sendable, Equatable, Codable {
     public var schedules: Bool
     /// Pull/recreate/remove this container (destructive lifecycle).
     public var lifecycle: Bool
+    /// Create/download/restore/delete backups of this container's data.
+    public var backups: Bool
 
     public init(
         view: Bool = false, power: Bool = false, files: Bool = false, console: Bool = false,
-        schedules: Bool = false, lifecycle: Bool = false
+        schedules: Bool = false, lifecycle: Bool = false, backups: Bool = false
     ) {
         self.view = view
         self.power = power
@@ -36,6 +40,7 @@ public struct ContainerGrant: Sendable, Equatable, Codable {
         self.console = console
         self.schedules = schedules
         self.lifecycle = lifecycle
+        self.backups = backups
     }
 
     public func allows(_ permission: ContainerPermission) -> Bool {
@@ -46,10 +51,37 @@ public struct ContainerGrant: Sendable, Equatable, Codable {
         case .console: console
         case .schedules: schedules
         case .lifecycle: lifecycle
+        case .backups: backups
         }
     }
 
-    public var isEmpty: Bool { !view && !power && !files && !console && !schedules && !lifecycle }
+    public var isEmpty: Bool {
+        !view && !power && !files && !console && !schedules && !lifecycle && !backups
+    }
+
+    /// Sets one permission by case (used when building a grant from a list of
+    /// permission keys).
+    public mutating func set(_ permission: ContainerPermission, _ value: Bool) {
+        switch permission {
+        case .view: view = value
+        case .power: power = value
+        case .files: files = value
+        case .console: console = value
+        case .schedules: schedules = value
+        case .lifecycle: lifecycle = value
+        case .backups: backups = value
+        }
+    }
+
+    /// The permissions held by *both* grants — the ceiling enforcement for
+    /// delegated (sub-user) grants: a granter can never confer more than they
+    /// themselves hold.
+    public func intersection(with other: ContainerGrant) -> ContainerGrant {
+        ContainerGrant(
+            view: view && other.view, power: power && other.power, files: files && other.files,
+            console: console && other.console, schedules: schedules && other.schedules,
+            lifecycle: lifecycle && other.lifecycle, backups: backups && other.backups)
+    }
 }
 
 /// Pure scoping logic — THE security boundary of the web panel. No I/O, no

@@ -156,6 +156,143 @@ import Testing
             ContainerStats(
                 name: "x", cpuPercent: 0, memUsedBytes: 0, memLimitBytes: 0, memPercent: 0,
                 netRxBytes: 0, netTxBytes: 0, pids: 0, measuredAt: Date()))
-        #expect(PanelSchema.currentVersion == 7)
+        #expect(PanelSchema.currentVersion == 15)
+    }
+
+    @Test func migratesToV15AddingManagedDatabases() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try PanelDataStore(databasePath: dir.appending(path: "v15.sqlite").path)
+        let user = try store.createUser(username: "a", passwordHash: "h", isAdmin: true)
+        let sid = try store.createServerRecord(
+            uuid: "u", name: "srv", eggID: nil, dockerImage: "img", ownerUserID: user.id,
+            limits: .init(memoryMiB: 128), startup: "", values: [:])
+        // Engine config singleton round-trips.
+        #expect(try store.databaseEngineConfig() == nil)
+        try store.setDatabaseEngineConfig(.init(rootPassword: "rootpw", hostPort: 3306, image: "mariadb:11"))
+        #expect(try store.databaseEngineConfig()?.rootPassword == "rootpw")
+        // A managed database carries its password + managed flag.
+        let dbID = try store.createManagedDatabase(
+            serverID: sid, name: "s\(sid)_app", host: "host.docker.internal", port: 3306,
+            username: "u\(sid)_app", password: "secretpw")
+        let rec = try #require(try store.database(id: dbID))
+        #expect(rec.managed && rec.password == "secretpw" && rec.username == "u\(sid)_app")
+        #expect(try store.listDatabases(serverID: sid).first?.managed == true)
+    }
+
+    @Test func migratesToV14AddingScheduleTasks() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try PanelDataStore(databasePath: dir.appending(path: "v14.sqlite").path)
+        #expect(try store.scheduleTasks(containerName: "bot").isEmpty)
+        try store.setScheduleTasks(
+            containerName: "bot",
+            tasks: [
+                ScheduleTask(seq: 0, action: .command, payload: "say restarting", offsetSeconds: 0),
+                ScheduleTask(seq: 1, action: .backup, payload: "nightly", offsetSeconds: 60),
+                ScheduleTask(seq: 2, action: .power, payload: "restart", offsetSeconds: 5),
+            ])
+        let tasks = try store.scheduleTasks(containerName: "bot")
+        #expect(tasks.map(\.action) == [.command, .backup, .power])
+        #expect(tasks.map(\.seq) == [0, 1, 2])  // seq reassigned from order
+        #expect(tasks[1].offsetSeconds == 60)
+        // Deleting the schedule cascades to its tasks.
+        try store.upsertSchedule(containerName: "bot", hour: 4, minute: 0, weekdays: [])
+        try store.deleteSchedule(containerName: "bot")
+        #expect(try store.scheduleTasks(containerName: "bot").isEmpty)
+    }
+
+    @Test func scheduleTaskValidationRejectsBadInput() {
+        #expect(ScheduleTask(seq: 0, action: .power, payload: "explode").validated() == nil)
+        #expect(ScheduleTask(seq: 0, action: .command, payload: "   ").validated() == nil)
+        // Valid ones normalize: power lowercased, offset clamped.
+        let power = ScheduleTask(seq: 0, action: .power, payload: "ReStart", offsetSeconds: -5).validated()
+        #expect(power?.payload == "restart" && power?.offsetSeconds == 0)
+        let backup = ScheduleTask(seq: 0, action: .backup, payload: "", offsetSeconds: 999_999).validated()
+        #expect(backup?.offsetSeconds == ScheduleTask.maxOffsetSeconds)  // clamped
+    }
+
+    @Test func migratesToV12AddingPasswordResets() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try PanelDataStore(databasePath: dir.appending(path: "v12.sqlite").path)
+        let user = try store.createUser(username: "a", passwordHash: "h", isAdmin: false)
+        let future = "2999-01-01T00:00:00.000Z"
+        try store.createPasswordReset(userID: user.id, tokenHash: "hash1", expiresAtISO: future)
+        #expect(try store.validPasswordReset(tokenHash: "hash1", nowISO: "2026-09-03T00:00:00.000Z") == user.id)
+        // Expired token (now past its expiry) is not valid.
+        #expect(try store.validPasswordReset(tokenHash: "hash1", nowISO: "3000-01-01T00:00:00.000Z") == nil)
+        // Issuing a new token supersedes the prior unused one.
+        try store.createPasswordReset(userID: user.id, tokenHash: "hash2", expiresAtISO: future)
+        #expect(try store.validPasswordReset(tokenHash: "hash1", nowISO: "2026-09-03T00:00:00.000Z") == nil)
+        // Consuming makes it single-use.
+        try store.consumePasswordReset(tokenHash: "hash2", atISO: "2026-09-03T00:00:00.000Z")
+        #expect(try store.validPasswordReset(tokenHash: "hash2", nowISO: "2026-09-03T00:00:00.000Z") == nil)
+    }
+
+    @Test func migratesToV11AddingSchedulesTable() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try PanelDataStore(databasePath: dir.appending(path: "v11.sqlite").path)
+        // The schedules table exists and round-trips a row with weekdays + run log.
+        #expect(try store.listSchedules().isEmpty)
+        try store.upsertSchedule(containerName: "bot", hour: 4, minute: 30, weekdays: [1, 3, 5])
+        let row = try #require(try store.schedule(containerName: "bot"))
+        #expect(row.hour == 4 && row.minute == 30 && row.weekdays == [1, 3, 5])
+        #expect(row.lastRunAt == nil)
+        try store.recordScheduleRun(containerName: "bot", at: "2026-09-03T04:30:00.000Z", outcome: "ok", message: "restarted bot")
+        #expect(try store.schedule(containerName: "bot")?.lastOutcome == "ok")
+        // Re-setting clears the run history (matches a rewritten launchd agent).
+        try store.upsertSchedule(containerName: "bot", hour: 5, minute: 0, weekdays: [])
+        let reset = try #require(try store.schedule(containerName: "bot"))
+        #expect(reset.hour == 5 && reset.weekdays.isEmpty && reset.lastRunAt == nil)
+        try store.deleteSchedule(containerName: "bot")
+        #expect(try store.schedule(containerName: "bot") == nil)
+    }
+
+    @Test func migratesToV9AddingBackupsPermissionAndTable() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try PanelDataStore(databasePath: dir.appending(path: "v9.sqlite").path)
+        let user = try store.createUser(username: "a", passwordHash: "h", isAdmin: false)
+        // The 7th permission round-trips.
+        try store.setGrant(userID: user.id, containerName: "bot", grant: ContainerGrant(view: true, backups: true))
+        #expect(try store.grants(forUserID: user.id)["bot"]?.backups == true)
+        // The backups table is present + writable.
+        #expect(try store.listBackups(containerName: "bot").isEmpty)
+    }
+
+    @Test func migratesV7ToV8SeedingTheSelfNodeAndProvisioningTables() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let path = dir.appending(path: "v8.sqlite").path
+        // A minimal pre-v8 database (just enough of the v1 base + user_version=7).
+        do {
+            let db = try Database(path: path)
+            try db.execute(
+                """
+                CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL, is_admin INTEGER NOT NULL DEFAULT 0, created_at TEXT);
+                CREATE TABLE grants (user_id INTEGER NOT NULL, container_name TEXT NOT NULL,
+                    perm_view INTEGER NOT NULL DEFAULT 0, perm_power INTEGER NOT NULL DEFAULT 0,
+                    perm_files INTEGER NOT NULL DEFAULT 0, perm_console INTEGER NOT NULL DEFAULT 0,
+                    perm_schedules INTEGER NOT NULL DEFAULT 0, perm_lifecycle INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (user_id, container_name));
+                """)
+            db.userVersion = 7
+        }
+        // Opening runs the v8 migration.
+        let store = try PanelDataStore(databasePath: path)
+        // The single self-node row is seeded with defaults.
+        let node = try store.nodeConfig()
+        #expect(node.hostIP == "127.0.0.1")
+        #expect(node.portRangeStart == 25565)
+        #expect(node.portRangeEnd == 25700)
+        // The new tables exist and are writable.
+        let nest = try store.createNest(name: "Minecraft", author: nil, description: nil)
+        #expect(try store.listNests().count == 1)
+        #expect(nest > 0)
+        // Global settings default cleanly with no rows.
+        #expect(try store.globalSettings().require2FA == .off)
     }
 }

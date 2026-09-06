@@ -49,7 +49,7 @@ const bytes = n => {
 let statSrc = null, logSrc = null, landingTimer = null, current = null, detail = null, tab = 'console';
 let statusTimer = null;
 let me = { isAdmin: false };
-function closeStreams() { if (statSrc) { statSrc.close(); statSrc = null; } if (logSrc) { logSrc.close(); logSrc = null; } }
+function closeStreams() { if (statSrc) { statSrc.close(); statSrc = null; } if (logSrc) { logSrc.close(); logSrc = null; } stopStartupPoll(); }
 function stopLanding() { if (landingTimer) { clearInterval(landingTimer); landingTimer = null; } }
 function stopStatus() { if (statusTimer) { clearInterval(statusTimer); statusTimer = null; } }
 async function jget(p) { const r = await fetch(p); if (!r.ok) throw r; return r.json(); }
@@ -202,6 +202,7 @@ function maintenanceCard() {
   return h('div', {},
     h('h2', { class: 'section', text: 'Maintenance (admin)' }),
     h('div', { class: 'filebar' },
+      h('a', { class: 'btnlink', href: '/admin', text: 'Manage servers in browser' }),
       h('button', { text: 'Disk usage', onclick: showDisk }),
       h('button', { text: 'Prune dangling images', onclick: pruneImages })));
 }
@@ -334,7 +335,11 @@ window.enter = async function (name) {
   tabs.push(['overview', 'Overview', 'ⓘ']);
   tabs.push(['logs', 'Logs', '≣']);
   if (p.files && detail.filesAvailable) tabs.push(['files', 'Files', '▤']);
+  if (p.backups) tabs.push(['backups', 'Backups', '⤓']);
   if (p.schedules) tabs.push(['schedules', 'Schedules', '⏱']);
+  if (detail.canManageSubusers) tabs.push(['users', 'Users', '⚇']);
+  if (detail.canManageSubusers) tabs.push(['network', 'Network', '⇄']);
+  tabs.push(['activity', 'Activity', '◷']);
   tabbar.hidden = false;
   tabbar.replaceChildren(...tabs.map(t => h('button', { class: 'navitem', 'data-t': t[0], onclick: () => setTab(t[0]) },
     h('span', { class: 'tile', text: t[2] }), h('span', { class: 'lbl', text: t[1] }))));
@@ -375,12 +380,51 @@ function statCards() {
     card('uptime', '⏱', 'Uptime', d.uptime || null, d.running ? null : 'Stopped'));
 }
 
+// A banner shown when a stopped container did not exit cleanly (crash or OOM).
+function crashBanner(x) {
+  const bits = [];
+  if (x.restartCount) bits.push(x.restartCount + (x.restartCount === 1 ? ' restart' : ' restarts'));
+  if (x.finishedAt) bits.push('stopped ' + x.finishedAt.replace('T', ' ').replace(/\..*/, ''));
+  return h('div', { class: 'crashbar' + (x.oomKilled ? ' oom' : '') },
+    h('span', { class: 'ci', text: x.oomKilled ? '⚠' : '✕' }),
+    h('div', { class: 'cb' },
+      h('div', { class: 'ct', text: x.reason || 'Stopped unexpectedly' }),
+      bits.length ? h('div', { class: 'cs', text: bits.join('  ·  ') }) : null));
+}
+
 function wsHead() {
   return h('div', { class: 'wshead' },
     h('div', { class: 'h' },
-      h('h1', { text: current }),
+      h('div', { class: 'titlerow' }, h('h1', { text: current }), startPill()),
       h('div', { class: 'desc', text: detail.image + (detail.stack ? '  ·  ' + detail.stack : '') })),
     powerRow());
+}
+// A running egg-server reports whether it has finished booting: "Starting…"
+// until the egg's done marker appears, then "Online".
+function startPill() {
+  if (detail.startupState === 'starting') return h('span', { class: 'spill starting', text: 'Starting…' });
+  if (detail.startupState === 'online') return h('span', { class: 'spill online', text: 'Online' });
+  return null;
+}
+// While a server is "starting", re-poll its detail so the pill flips to "Online"
+// on its own once the egg's done marker appears. Stops as soon as it's online or
+// the user leaves the container.
+let startupTimer = null;
+function stopStartupPoll() { if (startupTimer) { clearTimeout(startupTimer); startupTimer = null; } }
+function scheduleStartupPoll() {
+  stopStartupPoll();
+  if (!current || !detail || detail.startupState !== 'starting') return;
+  startupTimer = setTimeout(async () => {
+    if (!current) return;
+    try {
+      const d = await jget('/api/containers/' + enc(current));
+      if (!current || !detail) return;
+      detail.startupState = d.startupState;
+      const tr = document.querySelector('.titlerow');
+      if (tr) { const old = tr.querySelector('.spill'); if (old) old.remove(); const np = startPill(); if (np) tr.append(np); }
+      scheduleStartupPoll();
+    } catch (_) {}
+  }, 5000);
 }
 function metaRows() {
   const d = detail, kv = (k, v) => h('div', { class: 'kv' }, h('span', { class: 'kk', text: k }), h('span', { class: 'vv', text: v }));
@@ -394,6 +438,7 @@ window.setTab = function (t) { if (logSrc) { logSrc.close(); logSrc = null; } ta
 function render() {
   tabbar.querySelectorAll('.navitem').forEach(b => b.classList.toggle('sel', b.getAttribute('data-t') === tab));
   const parts = [wsHead()];
+  if (detail.exit && detail.exit.crashed) parts.push(crashBanner(detail.exit));
   if (tab === 'console') {
     const main = h('div', {}, lifecycleRow(), h('div', { class: 'term', id: 'cterm' }), quickRow(), inputBar());
     parts.push(h('div', { class: 'consolelayout' }, main, statCards()));
@@ -404,13 +449,22 @@ function render() {
     parts.push(h('div', { class: 'consolelayout' }, main, statCards()));
   } else if (tab === 'logs') { parts.push(...logsTab()); }
   else if (tab === 'files') { parts.push(h('div', { id: 'files' })); }
+  else if (tab === 'backups') { parts.push(h('div', { id: 'backups' }, 'Loading…')); }
   else if (tab === 'schedules') { parts.push(h('div', { id: 'sched' }, 'Loading…')); }
+  else if (tab === 'users') { parts.push(h('div', { id: 'users' }, 'Loading…')); }
+  else if (tab === 'network') { parts.push(h('div', { id: 'network' }, 'Loading…')); }
+  else if (tab === 'activity') { parts.push(h('div', { id: 'activity' }, 'Loading…')); }
   show(parts);
   if (tab === 'logs') startLogs();
-  if (tab === 'console') bindConsole();
+  if (tab === 'console') { bindConsole(); startConsole(); }
   if (tab === 'overview') loadSparkline();
   if (tab === 'files') listDir('');
+  if (tab === 'backups') loadBackups();
   if (tab === 'schedules') loadSchedule();
+  if (tab === 'users') loadSubusers();
+  if (tab === 'network') loadAllocations();
+  if (tab === 'activity') loadActivity();
+  scheduleStartupPoll();
 }
 
 // --- console + power + lifecycle -------------------------------------------
@@ -472,28 +526,205 @@ function quickRow() {
   return h('div', { class: 'quick' }, quick.map(q => h('button', { onclick: () => qk(q), text: q })));
 }
 function inputBar() {
-  const mc = /mc|minecraft/i.test(current);
   return h('div', { class: 'inputbar' },
     h('span', { class: 'chev', text: '›' }),
-    h('input', { id: 'cin', placeholder: mc ? 'server command' : 'shell command', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' }),
+    h('input', { id: 'cin', placeholder: 'Console command (e.g. say hi, stop)', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' }),
     h('button', { onclick: runCmd }, 'Send'));
 }
-let history = [];
+let history = [], histAt = 0;
 function bindConsole() {
   const inp = document.getElementById('cin');
-  if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') runCmd(); if (e.key === 'ArrowUp' && history.length) inp.value = history[history.length - 1]; });
+  if (inp) inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter') runCmd();
+    else if (e.key === 'ArrowUp' && history.length) { histAt = Math.max(0, histAt - 1); inp.value = history[histAt] || ''; }
+    else if (e.key === 'ArrowDown' && history.length) { histAt = Math.min(history.length, histAt + 1); inp.value = history[histAt] || ''; }
+  });
 }
 function qk(t) { const i = document.getElementById('cin'); i.value += t; i.focus(); }
+// The console feeds off the live LOG stream (one reliable output source), and
+// input goes to the server process's stdin — a command's result shows up in the
+// stream like any other output (the Pterodactyl console model).
+function startConsole() {
+  const term = document.getElementById('cterm'); if (!term || logSrc) return;
+  logSrc = new EventSource(api('/logs'));
+  logSrc.onmessage = e => {
+    const at = term.scrollTop + term.clientHeight >= term.scrollHeight - 30;
+    term.append(e.data + '\n');
+    if (at) term.scrollTop = term.scrollHeight;
+  };
+}
 async function runCmd() {
   const inp = document.getElementById('cin'), term = document.getElementById('cterm');
-  const cmd = inp.value.trim(); if (!cmd) return; inp.value = ''; history.push(cmd);
-  term.append(h('div', { class: 'cmdline', text: '$ ' + cmd }));
-  try {
-    const r = await fetch(api('/console'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ command: cmd }) });
-    const j = await r.json();
-    term.append(h('div', { class: j.isError ? 'cerr' : '', text: j.output || '' }));
-  } catch (e) { term.append(h('div', { class: 'cerr', text: 'request failed' })); }
+  const cmd = inp.value.trim(); if (!cmd) return; inp.value = ''; history.push(cmd); histAt = history.length;
+  term.append(h('div', { class: 'cmdline', text: '> ' + cmd }));
   term.scrollTop = term.scrollHeight;
+  try {
+    const r = await fetch(api('/console/input'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ line: cmd }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); term.append(h('div', { class: 'cerr', text: j.error || 'The server rejected the command.' })); term.scrollTop = term.scrollHeight; }
+  } catch (e) { term.append(h('div', { class: 'cerr', text: 'request failed' })); }
+}
+
+// --- backups ----------------------------------------------------------------
+async function loadBackups() {
+  const host = document.getElementById('backups'); if (!host) return;
+  host.replaceChildren(msg('Loading…'));
+  try {
+    const list = await jget(api('/backups'));
+    const rows = list.map(b => h('div', { class: 'brow' },
+      h('div', {},
+        h('div', { text: b.name || b.uuid.slice(0, 8) }),
+        h('div', { class: 'sub', text: bytes(b.bytes) + ' · ' + (b.createdAt || '').replace('T', ' ').replace(/\..*/, '') })),
+      h('div', { class: 'bact' },
+        h('a', { class: 'lnk', href: api('/backups/download?uuid=' + enc(b.uuid)), text: 'Download' }),
+        h('button', { onclick: () => restoreBackup(b) }, 'Restore'),
+        h('button', { class: 'rm', onclick: () => deleteBackup(b) }, 'Delete'))));
+    host.replaceChildren(
+      h('div', { class: 'toolrow' },
+        h('button', { onclick: createBackup }, 'Create backup'),
+        h('span', { class: 'muted', text: list.length + ' backup(s)' })),
+      list.length ? h('div', {}, ...rows) : msg('No backups yet.'));
+  } catch (e) { host.replaceChildren(msg('Failed to load backups.', true)); }
+}
+async function createBackup() {
+  const name = prompt('Backup name (optional):');
+  if (name === null) return;
+  const host = document.getElementById('backups');
+  if (host) host.prepend(msg('Creating backup… this can take a while for a large server.'));
+  try {
+    const r = await fetch(api('/backups'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ name: name || null }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || 'Backup failed.'); }
+  } catch (e) { alert('Backup failed.'); }
+  loadBackups();
+}
+async function restoreBackup(b) {
+  if (!confirm('Restore "' + (b.name || b.uuid.slice(0, 8)) + '"?\nThis STOPS the server and REPLACES its current data.')) return;
+  try {
+    const r = await fetch(api('/backups/restore?uuid=' + enc(b.uuid)), { method: 'POST', headers: CSRF });
+    alert(r.ok ? 'Restored. Start the server when you are ready.' : 'Restore failed.');
+  } catch (e) { alert('Restore failed.'); }
+}
+async function deleteBackup(b) {
+  if (!confirm('Delete this backup permanently?')) return;
+  try { await fetch(api('/backups?uuid=' + enc(b.uuid)), { method: 'DELETE', headers: CSRF }); } catch (e) {}
+  loadBackups();
+}
+
+// --- sub-users (owner-managed access delegation) ----------------------------
+const PERM_LABELS = { power: 'Power', console: 'Console', files: 'Files', schedules: 'Schedules', backups: 'Backups', lifecycle: 'Lifecycle' };
+async function loadSubusers() {
+  const host = document.getElementById('users'); if (!host) return;
+  host.replaceChildren(msg('Loading…'));
+  try {
+    const data = await jget(api('/subusers'));
+    const rows = data.subusers.map(u => h('div', { class: 'brow' },
+      h('div', {},
+        h('div', { text: u.username }),
+        h('div', { class: 'sub', text: u.permissions.length ? u.permissions.map(k => PERM_LABELS[k] || k).join(', ') : 'View only' })),
+      h('div', { class: 'bact' },
+        h('button', { onclick: () => editSubuser(data, u) }, 'Edit'),
+        h('button', { class: 'rm', onclick: () => removeSubuser(u) }, 'Remove'))));
+    host.replaceChildren(
+      h('div', { class: 'toolrow' },
+        h('button', { onclick: () => editSubuser(data, null) }, 'Add user'),
+        h('span', { class: 'muted', text: data.subusers.length + ' additional user(s)' })),
+      data.subusers.length ? h('div', {}, ...rows) : msg('No additional users yet. Add an existing account to share access to this server.'));
+  } catch (e) { host.replaceChildren(msg('Failed to load users.', true)); }
+}
+function editSubuser(data, existing) {
+  const host = document.getElementById('users'); if (!host) return;
+  const uname = h('input', { type: 'text', placeholder: 'existing account username', value: existing ? existing.username : '', disabled: !!existing, autocapitalize: 'off', autocorrect: 'off' });
+  const checks = {};
+  const permRows = data.permissionKeys.map(k => {
+    const grantable = k !== 'files' || data.filesGrantable;
+    const cb = h('input', { type: 'checkbox', disabled: !grantable, checked: !!(existing && existing.permissions.includes(k)) });
+    checks[k] = cb;
+    return h('label', { class: 'permrow' }, cb, h('span', { text: (PERM_LABELS[k] || k) + (grantable ? '' : ' — this server has no file access') }));
+  });
+  const err = h('div', { class: 'cerr', hidden: true });
+  const save = async () => {
+    const username = uname.value.trim();
+    if (!username) { err.textContent = 'Enter a username.'; err.hidden = false; return; }
+    const permissions = data.permissionKeys.filter(k => checks[k].checked);
+    try {
+      const r = await fetch(api('/subusers'), { method: 'PUT', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ username, permissions }) });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); err.textContent = j.error || 'Could not save.'; err.hidden = false; return; }
+      loadSubusers();
+    } catch (e) { err.textContent = 'Request failed.'; err.hidden = false; }
+  };
+  host.replaceChildren(
+    h('div', { class: 'subedit' },
+      h('h3', { text: existing ? 'Edit ' + existing.username : 'Add a user' }),
+      h('div', { class: 'field' }, uname),
+      h('div', { class: 'perms' }, ...permRows),
+      h('div', { class: 'note', text: 'Every user also gets view. Grant only what they need — you can never grant more than you hold.' }),
+      err,
+      h('div', { class: 'toolrow' },
+        h('button', { onclick: save }, 'Save'),
+        h('button', { class: 'lnk', onclick: loadSubusers }, 'Cancel'))));
+}
+async function removeSubuser(u) {
+  if (!confirm('Remove ' + u.username + ' from this server? They will lose all access to it.')) return;
+  try { await fetch(api('/subusers/' + enc(u.username)), { method: 'DELETE', headers: CSRF }); } catch (e) {}
+  loadSubusers();
+}
+
+// --- network (client-managed port allocations) ------------------------------
+async function loadAllocations() {
+  const host = document.getElementById('network'); if (!host) return;
+  host.replaceChildren(msg('Loading…'));
+  try {
+    const d = await jget(api('/allocations'));
+    const arows = d.assigned.map(a => h('div', { class: 'brow' },
+      h('div', {}, h('div', { text: a.ip + ':' + a.port + '/' + a.proto }),
+        h('div', { class: 'sub', text: a.isPrimary ? 'Primary — the server binds this port' : 'Additional' })),
+      h('div', { class: 'bact' },
+        a.isPrimary ? null : h('button', { onclick: () => allocAction('POST', '/allocations/' + a.id + '/primary', 'Make ' + a.port + ' the primary port? The server will be recreated.') }, 'Make primary'),
+        a.isPrimary ? null : h('button', { class: 'rm', onclick: () => allocAction('DELETE', '/allocations/' + a.id, 'Remove port ' + a.port + '? The server will be recreated.') }, 'Remove'))));
+    const parts = [h('div', { class: 'subedit' },
+      h('h3', { text: 'Ports' }),
+      h('div', {}, ...(d.assigned.length ? arows : [msg('No ports assigned.')])),
+      h('div', { class: 'note', text: 'Changing ports recreates the container briefly. Up to ' + d.limit + ' ports per server.' }))];
+    if (d.assigned.length >= d.limit) parts.push(msg('This server is at its port limit.'));
+    else if (!d.available.length) parts.push(msg('No free ports available. Ask an admin to generate more.'));
+    else {
+      const sel = h('select', {}, ...d.available.slice(0, 250).map(a => h('option', { value: a.id }, a.ip + ':' + a.port + '/' + a.proto)));
+      parts.push(h('div', { class: 'toolrow' }, sel,
+        h('button', { onclick: () => allocAction('POST', '/allocations', 'Add this port? The server will be recreated.', { id: Number(sel.value) }) }, 'Add port')));
+    }
+    host.replaceChildren(...parts);
+  } catch (e) { host.replaceChildren(msg('Failed to load network.', true)); }
+}
+async function allocAction(method, suffix, confirmMsg, body) {
+  if (!confirm(confirmMsg)) return;
+  const host = document.getElementById('network');
+  if (host) host.prepend(msg('Applying… the server is being recreated.'));
+  try {
+    const opts = { method, headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF) };
+    if (body) opts.body = JSON.stringify(body);
+    const r = await fetch(api(suffix), opts);
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || 'The change failed.'); }
+  } catch (e) { alert('Request failed.'); }
+  loadAllocations();
+}
+
+// --- activity (this server's audit trail, client-visible) -------------------
+const ACTION_LABELS = { 'container.view': 'Viewed', 'container.power': 'Power', 'container.files': 'Files', 'container.console': 'Console', 'container.schedules': 'Schedule', 'container.lifecycle': 'Lifecycle', 'container.backups': 'Backup', 'container.subuser': 'Sub-user', 'container.logs': 'Logs', 'container.stats': 'Stats', 'admin.server.edit': 'Edited (admin)', 'admin.server.suspend': 'Suspended (admin)', 'admin.server.unsuspend': 'Unsuspended (admin)', 'admin.server.reinstall': 'Reinstalled (admin)', 'admin.server.create': 'Created (admin)' };
+async function loadActivity() {
+  const host = document.getElementById('activity'); if (!host) return;
+  host.replaceChildren(msg('Loading…'));
+  try {
+    const list = await jget(api('/activity'));
+    if (!list.length) { host.replaceChildren(msg('No activity recorded yet.')); return; }
+    const rows = list.map(a => {
+      const bad = a.outcome === 'denied' || a.outcome === 'error' || a.outcome === 'missed';
+      return h('div', { class: 'arow' },
+        h('span', { class: 'aic ' + (bad ? 'bad' : 'ok'), text: a.outcome === 'denied' ? '⊘' : bad ? '!' : '✓' }),
+        h('div', { class: 'abody' },
+          h('div', { text: (ACTION_LABELS[a.action] || a.action) + (a.detail ? ' — ' + a.detail : '') }),
+          h('div', { class: 'sub', text: a.user + ' · ' + (a.at || '').replace('T', ' ').replace(/\..*/, '') })));
+    });
+    host.replaceChildren(h('div', { class: 'alist' }, ...rows));
+  } catch (e) { host.replaceChildren(msg('Failed to load activity.', true)); }
 }
 
 // --- logs (stream + search + download) --------------------------------------
@@ -569,7 +800,8 @@ async function listDir(path) {
   parts.forEach((seg, i) => { const acc = parts.slice(0, i + 1).join('/'); crumb.append(h('span', { text: '/' }), h('button', { onclick: () => cd(acc), text: seg })); });
   const bar = h('div', { class: 'filebar' },
     h('button', { text: '＋ New folder', onclick: () => mkdir(path) }),
-    uploadButton(path));
+    uploadButton(path),
+    h('button', { text: '↧ From URL', onclick: () => pullUrl(path) }));
   const listEl = h('div', { class: 'clist' }, entries.map(en => fileRow(en, path)));
   host.replaceChildren(crumb, bar, listEl);
 }
@@ -580,6 +812,8 @@ function fileRow(en, path) {
       onclick: () => en.isDirectory ? cd(en.path) : openFile(en.path) }),
     en.isDirectory ? null : h('span', { class: 'use', text: bytes(en.size) }));
   if (!en.isDirectory) row.append(h('button', { class: 'act', title: 'Download', onclick: () => window.open(api('/files/download') + '?path=' + enc(en.path), '_blank'), text: '⤓' }));
+  if (en.isDirectory) row.append(h('button', { class: 'act', title: 'Compress', onclick: () => compressEntry(en, path), text: '🗜' }));
+  else if (/\.(zip|tar\.gz|tgz|tar)$/i.test(en.name)) row.append(h('button', { class: 'act', title: 'Extract', onclick: () => extractEntry(en, path), text: '📦' }));
   row.append(
     h('button', { class: 'act', title: 'Rename', onclick: () => renameEntry(en, path), text: '✎' }),
     h('button', { class: 'act del', title: 'Delete', onclick: () => deleteEntry(en), text: '🗑' }));
@@ -598,6 +832,32 @@ function uploadButton(path) {
   };
   const btn = h('button', { text: '⤒ Upload', onclick: () => input.click() });
   return h('span', {}, btn, input);
+}
+async function compressEntry(en, path) {
+  const archive = (path ? path + '/' : '') + en.name + '.tar.gz';
+  try {
+    const r = await fetch(api('/files/compress'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ paths: [en.path], archive }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || 'Compress failed.'); }
+  } catch (e) { alert('Compress failed.'); }
+  listDir(path);
+}
+async function extractEntry(en, path) {
+  try {
+    const r = await fetch(api('/files/decompress'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ archive: en.path, into: path || '' }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || 'Extract failed.'); }
+  } catch (e) { alert('Extract failed.'); }
+  listDir(path);
+}
+async function pullUrl(path) {
+  const url = prompt('Download a file from URL (http/https):'); if (!url) return;
+  let name = url.split('?')[0].split('/').pop() || 'download';
+  name = prompt('Save as:', name); if (!name) return;
+  const target = (path ? path + '/' : '') + name;
+  try {
+    const r = await fetch(api('/files/pull'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ url, path: target }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || 'Download failed.'); }
+  } catch (e) { alert('Download failed.'); }
+  listDir(path);
 }
 async function mkdir(path) {
   const name = prompt('New folder name'); if (!name) return;
@@ -663,17 +923,21 @@ function accKey(ed, k) {
 // --- schedules --------------------------------------------------------------
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 let selDays = new Set();
+let schedTasks = [];
 async function loadSchedule() {
   const host = document.getElementById('sched'); if (!host) return;
   let data;
   try { data = await jget(api('/schedule')); } catch (e) { host.replaceChildren(msg('Unavailable.', true)); return; }
   const s = data.schedule; selDays = new Set(s ? s.weekdays : []);
+  schedTasks = (s && s.tasks ? s.tasks : []).map(t => ({ action: t.action, payload: t.payload, offsetSeconds: t.offsetSeconds }));
   const nodes = [];
   if (s) {
     nodes.push(h('div', { class: 'kv' }, h('span', { class: 'kk', text: 'Current' }), h('span', { class: 'vv', text: s.description })));
     if (s.lastRun) {
-      const cls = s.lastRun.outcome === 'ok' ? 'okrun' : (s.lastRun.outcome === 'timedOut' ? 'timeout' : 'fail');
-      nodes.push(h('div', { class: 'note ' + cls, text: 'Last run ' + s.lastRun.date + ' — ' + s.lastRun.outcome + (s.lastRun.message ? ': ' + s.lastRun.message : '') }));
+      const o = s.lastRun.outcome;
+      const cls = o === 'ok' ? 'okrun' : (o === 'timedOut' || o === 'missed' ? 'timeout' : 'fail');
+      const label = o === 'missed' ? 'Missed' : ('Last run ' + s.lastRun.date + ' — ' + o);
+      nodes.push(h('div', { class: 'note ' + cls, text: label + (s.lastRun.message ? ': ' + s.lastRun.message : '') }));
     }
   }
   const hh = s ? s.hour : 4, mm = s ? s.minute : 0;
@@ -683,14 +947,42 @@ async function loadSchedule() {
     b.onclick = () => { if (selDays.has(i)) { selDays.delete(i); b.classList.remove('on'); } else { selDays.add(i); b.classList.add('on'); } };
     return b;
   }));
+  const tasksHost = h('div', { id: 'schedtasks' });
   nodes.push(
     h('h2', { text: (s ? 'Change' : 'Add') + ' schedule' }),
     h('div', { class: 'field' }, 'At ', hSel, ' : ', mSel),
     daysEl,
-    h('div', { class: 'note', text: 'No days selected = every day. Runs via launchd even when the app is closed; restart only.' }),
+    h('div', { class: 'note', text: 'No days selected = every day.' }),
+    h('h2', { text: 'Tasks' }),
+    h('div', { class: 'note', text: 'When the schedule fires these run in order, each after its wait. With no tasks, the server is simply restarted.' }),
+    tasksHost,
     h('button', { class: 'primary', text: s ? 'Save changes' : 'Add schedule', onclick: () => saveSched(hSel, mSel) }));
   if (s) nodes.push(h('button', { class: 'danger', text: 'Remove schedule', onclick: delSched }));
   host.replaceChildren(...nodes);
+  drawSchedTasks();
+}
+function drawSchedTasks() {
+  const host = document.getElementById('schedtasks'); if (!host) return;
+  const rows = schedTasks.map((t, i) => {
+    const actionSel = h('select', {}, ...['power', 'command', 'backup'].map(a => h('option', { value: a, selected: a === t.action }, a[0].toUpperCase() + a.slice(1))));
+    actionSel.onchange = () => { t.action = actionSel.value; t.payload = t.action === 'power' ? 'restart' : ''; drawSchedTasks(); };
+    let payloadEl;
+    if (t.action === 'power') {
+      payloadEl = h('select', {}, ...['restart', 'start', 'stop'].map(p => h('option', { value: p, selected: p === (t.payload || 'restart') }, p)));
+      payloadEl.onchange = () => t.payload = payloadEl.value;
+    } else {
+      payloadEl = h('input', { type: 'text', value: t.payload || '', placeholder: t.action === 'command' ? 'console line (e.g. say restarting)' : 'backup name (optional)' });
+      payloadEl.addEventListener('input', () => t.payload = payloadEl.value);
+    }
+    const offEl = h('input', { type: 'number', min: '0', value: String(t.offsetSeconds || 0) });
+    offEl.addEventListener('input', () => t.offsetSeconds = Math.max(0, parseInt(offEl.value, 10) || 0));
+    return h('div', { class: 'taskrow' },
+      h('span', { class: 'seq', text: (i + 1) + '.' }), actionSel, payloadEl,
+      h('label', { class: 'wait' }, 'wait ', offEl, ' s'),
+      h('button', { class: 'btn ghost sm danger', type: 'button', onclick: () => { schedTasks.splice(i, 1); drawSchedTasks(); } }, '✕'));
+  });
+  host.replaceChildren(...rows,
+    h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { schedTasks.push({ action: 'power', payload: 'restart', offsetSeconds: 0 }); drawSchedTasks(); } }, 'Add task'));
 }
 function opts(n, sel) {
   const out = [];
@@ -698,7 +990,8 @@ function opts(n, sel) {
   return out;
 }
 async function saveSched(hSel, mSel) {
-  const r = await fetch(api('/schedule'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify({ hour: +hSel.value, minute: +mSel.value, weekdays: [...selDays] }) });
+  const body = { hour: +hSel.value, minute: +mSel.value, weekdays: [...selDays], tasks: schedTasks.map(t => ({ action: t.action, payload: t.payload || '', offsetSeconds: t.offsetSeconds || 0 })) };
+  const r = await fetch(api('/schedule'), { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, CSRF), body: JSON.stringify(body) });
   if (r.ok) loadSchedule(); else { const j = await r.json().catch(() => ({})); alert(j.error || 'Failed'); }
 }
 async function delSched() {

@@ -33,24 +33,62 @@ do { store = try PanelDataStore(databasePath: dbPath) } catch { fail("cannot ope
 var logger = Logger(label: "macerodactyld")
 logger.logLevel = .notice
 
-// First run: mint an admin if none exists so the panel is usable even when
-// launched daemon-first, dropping the one-time password in a 0600 file.
-// Idempotent — never disturbs existing accounts.
-if let created = try? await AccountManager(store: store).createFirstAdminIfNeeded() {
-    let creds = "username: \(created.username)\npassword: \(created.password)\n"
-    if let dir = try? AppPaths.supportDirectory() {
-        let url = dir.appending(path: "first-admin.txt")
-        // Create 0600 at creation time — no window where the one-time password
-        // is world-readable (createFile applies the mode as the file is made).
-        try? FileManager.default.removeItem(at: url)
-        FileManager.default.createFile(
-            atPath: url.path, contents: Data(creds.utf8), attributes: [.posixPermissions: 0o600])
-        logger.notice("created first admin — one-time password at \(url.path)")
-    }
+// First run: the operator creates the first admin through the browser (the panel
+// serves a setup page while no account exists) rather than fishing a password out
+// of an on-disk file. Just note where to go; never auto-mint an account here.
+if (try? AccountManager(store: store).hasAnyUser()) == false {
+    logger.notice("no accounts yet — open the panel and complete first-run setup to create the admin")
 }
 
-let containers = DaemonContainerService(cli: cli, stacksRoot: config.stacksRootURL)
+let containers = DaemonContainerService(cli: cli, stacksRoot: config.stacksRootURL, store: store)
 let server = PanelServer(store: store, containers: containers)
+
+// Cross-platform scheduled task chains. launchd does not exist on this (Linux)
+// host, so the DB-backed schedules the web writes are fired by an in-process
+// cron loop. A schedule runs its ordered chain — power / console command /
+// backup — or, with no chain, the implicit single restart. This never starts a
+// container at boot (compose restart policies own that); the daemon only acts on
+// a schedule's own tasks. Power runs under a hard deadline so a hung docker
+// (stale socket) is recorded as a timeout, not awaited forever.
+let scheduler = InProcessScheduler(store: store) { name, task in
+    switch task.action {
+    case .power:
+        do {
+            _ = try await cli.run([task.payload, name], timeout: .seconds(60))
+            return .success("\(task.payload) \(name)")
+        } catch DockerError.timeout {
+            return .timedOut("docker \(task.payload) \(name) timed out (the daemon may be down or the socket is stale)")
+        } catch {
+            return .failed("docker \(task.payload) \(name) failed: \(error)")
+        }
+    case .command:
+        let ok = await containers.consoleSend(containerName: name, line: task.payload)
+        return ok ? .success("sent to console") : .failed("the server isn't running / has no console")
+    case .backup:
+        do {
+            // A scheduled backup must be RECORDED (the web route records what it
+            // creates; the tar alone is invisible + unmanageable), and a nil means
+            // there was no data dir to back up — a failure, not silent success.
+            guard let made = try await containers.createBackup(containerName: name) else {
+                return .failed("no data directory to back up")
+            }
+            _ = try store.recordBackup(
+                containerName: name, uuid: made.uuid, name: "scheduled", fileName: made.fileName,
+                bytes: made.bytes, checksum: nil)
+            // Rotate: keep the newest 20, prune older ones so scheduled backups
+            // don't grow without bound.
+            let all = (try? store.listBackups(containerName: name)) ?? []  // newest first
+            for old in all.dropFirst(20) {
+                try? await containers.deleteBackupFile(containerName: name, fileName: old.fileName)
+                try? store.deleteBackup(uuid: old.uuid)
+            }
+            return .success("backed up \(name)")
+        } catch {
+            return .failed("backup failed: \(error)")
+        }
+    }
+}
+let schedulerTask = Task { await scheduler.run() }
 
 // TLS is opt-in for LAN-without-tunnel: generate a self-signed cert on demand.
 // Fail CLOSED — someone who enabled HTTPS must never be silently downgraded to
@@ -76,6 +114,14 @@ logger.notice("macerodactyld serving \(scheme) on \(host):\(config.port) — doc
 do {
     try await server.runUntilTerminated(
         config: .init(port: config.port, bindLAN: config.bindLAN, tls: tlsFiles), logger: logger)
+    // Graceful stop: cancel the loop, then WAIT for any in-flight restart to
+    // finish recording its outcome before the process exits (a SIGKILL can't be
+    // drained — nothing can — but a normal SIGTERM shutdown no longer loses the
+    // record of a restart it was in the middle of firing).
+    schedulerTask.cancel()
+    _ = await schedulerTask.value
+    await scheduler.awaitInFlight()  // let any running chain finish recording
 } catch {
+    schedulerTask.cancel()
     fail("server error: \(error)")
 }

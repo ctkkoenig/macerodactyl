@@ -37,8 +37,10 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
         }
     }
 
+    var cannedLogHistory: [String: String] = [:]
     func logHistory(containerName: String, tail: Int, since: String?) async -> String? {
         guard fixtures[containerName] != nil else { return nil }
+        if let canned = cannedLogHistory[containerName] { return canned }
         return [
             "2026-09-02T10:00:00Z starting up",
             "2026-09-02T10:00:01Z listening on 8080",
@@ -50,6 +52,13 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
     func runConsole(containerName: String, command: String) async -> ConsoleEntry? {
         guard fixtures[containerName] != nil else { return nil }
         return ConsoleEntry(command: command, output: "ran: \(command)")
+    }
+
+    private(set) var consoleInput: [(name: String, line: String)] = []
+    func consoleSend(containerName: String, line: String) async -> Bool {
+        guard let fixture = fixtures[containerName], fixture.container.isRunning else { return false }
+        lock.withLock { consoleInput.append((containerName, line)) }
+        return true
     }
 
     func fileService(containerName: String) async -> FileService? {
@@ -64,6 +73,16 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
         "bot": ContainerLimits(memoryBytes: 512 * 1024 * 1024, cpuCores: 2)  // "secret" left unlimited
     ]
     func limits() async -> [String: ContainerLimits] { cannedLimits }
+    var cannedExitInfo: [String: ContainerExitInfo] = [:]
+    func exitInfo(containerName: String) async -> ContainerExitInfo? { cannedExitInfo[containerName] }
+    var cannedStartedAt: [String: Date] = [:]
+    func startedAt(containerName: String) async -> Date? { cannedStartedAt[containerName] }
+    private(set) var databaseSQL: [String] = []
+    var databaseSQLShouldFail = false
+    func executeDatabaseSQL(_ sql: String, engine: DatabaseEngineConfig) async throws {
+        if databaseSQLShouldFail { throw ContainerServiceError.notFound }
+        lock.withLock { databaseSQL.append(sql) }
+    }
 
     func statsSnapshot() async -> [String: ContainerStats] {
         var out: [String: ContainerStats] = [:]
@@ -90,12 +109,22 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
     var dockerIsReachable = true
     func dockerReachable() async -> Bool { dockerIsReachable }
 
-    func schedule(containerName: String) async -> (RestartSchedule, ScheduleRunResult?)? { nil }
+    private var currentSchedules: [String: RestartSchedule] = [:]
+    func schedule(containerName: String) async -> (RestartSchedule, ScheduleRunResult?)? {
+        lock.withLock { currentSchedules[containerName] }.map { ($0, nil) }
+    }
     func setSchedule(containerName: String, hour: Int, minute: Int, weekdays: Set<Int>) async throws {
-        lock.withLock { scheduleCalls.append(("set", containerName)) }
+        lock.withLock {
+            scheduleCalls.append(("set", containerName))
+            currentSchedules[containerName] = RestartSchedule(
+                containerName: containerName, hour: hour, minute: minute, weekdays: weekdays)
+        }
     }
     func removeSchedule(containerName: String) async throws {
-        lock.withLock { scheduleCalls.append(("remove", containerName)) }
+        lock.withLock {
+            scheduleCalls.append(("remove", containerName))
+            currentSchedules[containerName] = nil
+        }
     }
 
     // Lifecycle — records the op and streams a couple of canned progress lines.
@@ -128,6 +157,21 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
         lock.withLock { lifecycleCalls.append(("remove", containerName)) }
     }
 
+    private(set) var backupCalls: [(op: String, name: String, file: String)] = []
+    func createBackup(containerName: String) async throws -> BackupService.CreatedBackup? {
+        guard fixtures[containerName] != nil else { return nil }
+        let uuid = UUID().uuidString
+        lock.withLock { backupCalls.append(("create", containerName, uuid)) }
+        return BackupService.CreatedBackup(uuid: uuid, fileName: "\(uuid).tar.gz", bytes: 2048)
+    }
+    func restoreBackup(containerName: String, fileName: String) async throws {
+        lock.withLock { backupCalls.append(("restore", containerName, fileName)) }
+    }
+    func deleteBackupFile(containerName: String, fileName: String) async throws {
+        lock.withLock { backupCalls.append(("delete", containerName, fileName)) }
+    }
+    func backupFileURL(containerName: String, fileName: String) async -> URL? { nil }
+
     var pruneResult = "Total reclaimed space: 1.2GB"
     var diskResult = "TYPE  TOTAL  ACTIVE  SIZE  RECLAIMABLE"
     func imagePrune() async throws -> String {
@@ -135,6 +179,38 @@ final class FakeContainerService: ContainerService, @unchecked Sendable {
         return pruneResult
     }
     func diskUsage() async throws -> String { diskResult }
+
+    // Provisioning — records the spec and streams a scripted install log so route
+    // tests run end-to-end without docker. `existingStacks` simulates name clashes.
+    private(set) var provisionSpecs: [ProvisionSpec] = []
+    private(set) var deprovisioned: [String] = []
+    var existingStacks: Set<String> = []
+    var provisionShouldFail = false
+    func provision(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        lock.withLock { provisionSpecs.append(spec) }
+        if provisionShouldFail {
+            return AsyncThrowingStream { continuation in
+                continuation.yield("» Preparing \(spec.name)…")
+                continuation.yield("✖ Provisioning failed: docker exited 1")
+                continuation.finish(throwing: ContainerServiceError.unavailable("install failed"))
+            }
+        }
+        return cannedStream(["» Preparing \(spec.name)…", "» Starting the server…", "✔ Server \"\(spec.name)\" created."])
+    }
+    private(set) var reconfigured: [ProvisionSpec] = []
+    private(set) var reinstalled: [ProvisionSpec] = []
+    func reconfigure(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        lock.withLock { reconfigured.append(spec) }
+        return cannedStream(["» Applying changes…", "✔ Server \"\(spec.name)\" updated."])
+    }
+    func reinstall(_ spec: ProvisionSpec) async -> AsyncThrowingStream<String, Error> {
+        lock.withLock { reinstalled.append(spec) }
+        return cannedStream(["» Re-running egg install…", "✔ Server \"\(spec.name)\" reinstalled."])
+    }
+    func deprovision(name: String) async throws {
+        lock.withLock { deprovisioned.append(name) }
+    }
+    func stackExists(name: String) async -> Bool { existingStacks.contains(name) }
 }
 
 extension DockerContainer {

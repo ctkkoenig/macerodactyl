@@ -1,0 +1,21 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Reset password · Macerodactyl</title>
+<link rel="stylesheet" href="/assets/login.css">
+</head><body>
+<div class="wrap">
+  <h1>Macerodactyl</h1>
+  <p class="sub">Choose a new password for your account.</p>
+  <div class="card">
+    <label for="p">New password</label>
+    <input id="p" type="password" autocomplete="new-password" autofocus>
+    <label for="p2">Confirm password</label>
+    <input id="p2" type="password" autocomplete="new-password">
+    <button id="go">Set new password</button>
+    <div class="err" id="err"></div>
+    <div class="ok" id="ok" hidden>Password updated. <a href="/login">Sign in</a>.</div>
+  </div>
+</div>
+<script src="/assets/reset.js"></script>
+</body></html>

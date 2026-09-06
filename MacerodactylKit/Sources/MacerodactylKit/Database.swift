@@ -205,7 +205,7 @@ public enum PanelBackup {
 /// Schema for the panel's persistent state. Landed in Phase 1 so accounts,
 /// scoping, and audit never have to be retrofitted into the data model.
 public enum PanelSchema {
-    public static let currentVersion = 7
+    public static let currentVersion = 15
 
     public static func migrate(_ db: Database) throws {
         if db.userVersion < 1 {
@@ -312,6 +312,248 @@ public enum PanelSchema {
             db.userVersion = 7
         }
         if db.userVersion < 8 {
+            // Server provisioning + the web admin panel. Eggs/nests (imported
+            // Pterodactyl egg JSON, kept byte-faithful in `raw_json`), the single
+            // self-node + its allocation pool, provisioned `server_records` and
+            // their variables, plus admin objects (locations, databases, mounts)
+            // and a key/value `panel_settings` for global policy.
+            try db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS panel_settings (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT
+                );
+                CREATE TABLE IF NOT EXISTS locations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    short TEXT NOT NULL UNIQUE,
+                    description TEXT
+                );
+                CREATE TABLE IF NOT EXISTS nodes (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    name TEXT NOT NULL DEFAULT 'local',
+                    location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+                    host_ip TEXT NOT NULL DEFAULT '127.0.0.1',
+                    port_range_start INTEGER NOT NULL DEFAULT 25565,
+                    port_range_end   INTEGER NOT NULL DEFAULT 25700
+                );
+                CREATE TABLE IF NOT EXISTS nests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    uuid TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    author TEXT,
+                    description TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE TABLE IF NOT EXISTS eggs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    nest_id INTEGER NOT NULL REFERENCES nests(id) ON DELETE CASCADE,
+                    uuid TEXT,
+                    name TEXT NOT NULL,
+                    author TEXT,
+                    description TEXT,
+                    meta_version TEXT,
+                    docker_images_json TEXT NOT NULL,
+                    startup TEXT NOT NULL,
+                    config_files TEXT,
+                    done_strings_json TEXT,
+                    config_logs TEXT,
+                    config_stop TEXT,
+                    script_install TEXT,
+                    script_container TEXT,
+                    script_entrypoint TEXT,
+                    features_json TEXT,
+                    file_denylist_json TEXT,
+                    raw_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE TABLE IF NOT EXISTS egg_variables (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    egg_id INTEGER NOT NULL REFERENCES eggs(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    env_variable TEXT NOT NULL,
+                    default_value TEXT,
+                    user_viewable INTEGER NOT NULL DEFAULT 1,
+                    user_editable INTEGER NOT NULL DEFAULT 1,
+                    rules TEXT,
+                    sort INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS server_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    uuid TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL UNIQUE,
+                    egg_id INTEGER REFERENCES eggs(id) ON DELETE SET NULL,
+                    docker_image TEXT NOT NULL,
+                    owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                    memory_mib INTEGER NOT NULL DEFAULT 0,
+                    swap_mib INTEGER NOT NULL DEFAULT 0,
+                    disk_mib INTEGER NOT NULL DEFAULT 0,
+                    cpu_percent INTEGER NOT NULL DEFAULT 0,
+                    cpu_pinning TEXT,
+                    io_weight INTEGER,
+                    pids_limit INTEGER,
+                    oom_disabled INTEGER NOT NULL DEFAULT 0,
+                    startup TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'installing',
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE TABLE IF NOT EXISTS server_variables (
+                    server_id INTEGER NOT NULL REFERENCES server_records(id) ON DELETE CASCADE,
+                    env_variable TEXT NOT NULL,
+                    value TEXT,
+                    PRIMARY KEY (server_id, env_variable)
+                );
+                CREATE TABLE IF NOT EXISTS allocations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ip TEXT NOT NULL,
+                    port INTEGER NOT NULL,
+                    proto TEXT NOT NULL DEFAULT 'tcp',
+                    server_name TEXT,
+                    is_primary INTEGER NOT NULL DEFAULT 0,
+                    notes TEXT,
+                    UNIQUE (ip, port, proto)
+                );
+                CREATE TABLE IF NOT EXISTS server_databases (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    server_id INTEGER NOT NULL REFERENCES server_records(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    host TEXT,
+                    port INTEGER,
+                    username TEXT,
+                    remote TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE TABLE IF NOT EXISTS mounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    read_only INTEGER NOT NULL DEFAULT 0,
+                    description TEXT
+                );
+                CREATE TABLE IF NOT EXISTS server_mounts (
+                    server_id INTEGER NOT NULL REFERENCES server_records(id) ON DELETE CASCADE,
+                    mount_id INTEGER NOT NULL REFERENCES mounts(id) ON DELETE CASCADE,
+                    PRIMARY KEY (server_id, mount_id)
+                );
+                INSERT OR IGNORE INTO nodes (id) VALUES (1);
+                """)
+            db.userVersion = 8
+        }
+        if db.userVersion < 9 {
+            // Seventh grant permission (backups) + the backups table. Existing
+            // grants default to no backup access.
+            try db.execute(
+                """
+                ALTER TABLE grants ADD COLUMN perm_backups INTEGER NOT NULL DEFAULT 0;
+                CREATE TABLE IF NOT EXISTS backups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    container_name TEXT NOT NULL,
+                    uuid TEXT NOT NULL UNIQUE,
+                    name TEXT,
+                    file_name TEXT NOT NULL,
+                    bytes INTEGER NOT NULL DEFAULT 0,
+                    checksum TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_backups_container ON backups(container_name, created_at);
+                """)
+            db.userVersion = 9
+        }
+        if db.userVersion < 10 {
+            // A human display name for a server (the identifier `name` stays the
+            // immutable slug). Servers become editable after creation.
+            try db.execute("ALTER TABLE server_records ADD COLUMN display_name TEXT")
+            db.userVersion = 10
+        }
+        if db.userVersion < 11 {
+            // DB-backed scheduled restarts, the cross-platform source of truth.
+            // On macOS the native app still drives launchd; on the Linux/server
+            // deploy macerodactyld's in-process cron loop reads this table (there
+            // is no launchd there). `weekdays` is a comma-separated list of
+            // launchd weekday numbers (0=Sun…6=Sat); empty means every day.
+            try db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schedules (
+                    container_name TEXT PRIMARY KEY,
+                    hour INTEGER NOT NULL,
+                    minute INTEGER NOT NULL,
+                    weekdays TEXT NOT NULL DEFAULT '',
+                    last_run_at TEXT,
+                    last_outcome TEXT,
+                    last_message TEXT
+                );
+                """)
+            db.userVersion = 11
+        }
+        if db.userVersion < 12 {
+            // Single-use, time-limited password-reset tokens. Only the token's
+            // SHA-256 hash is stored (like sessions), so a leaked database can't
+            // reset an account. Admin-issued; the link is handed to the user
+            // out of band (there is no email delivery).
+            try db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS password_resets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    token_hash TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    expires_at TEXT NOT NULL,
+                    used_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id);
+                """)
+            db.userVersion = 12
+        }
+        if db.userVersion < 13 {
+            // When a schedule was created, so the in-process scheduler can tell a
+            // fire it genuinely MISSED (the daemon was down at the fire time) from
+            // a slot that simply predates the schedule. Existing rows are backfilled
+            // to "now" so an upgrade never retroactively reports old slots as missed.
+            try db.execute("ALTER TABLE schedules ADD COLUMN created_at TEXT")
+            try db.run(
+                "UPDATE schedules SET created_at = ? WHERE created_at IS NULL",
+                [.text(PanelSchema.nowISO())])
+            db.userVersion = 13
+        }
+        if db.userVersion < 14 {
+            // Schedule task chains: an ordered list of steps a schedule runs when
+            // it fires (power / console command / backup), replacing the implicit
+            // single restart. A schedule with no rows here keeps the legacy
+            // restart behavior.
+            try db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schedule_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    container_name TEXT NOT NULL,
+                    seq INTEGER NOT NULL,
+                    action TEXT NOT NULL,
+                    payload TEXT NOT NULL DEFAULT '',
+                    offset_seconds INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_schedule_tasks_container ON schedule_tasks(container_name, seq);
+                """)
+            db.userVersion = 14
+        }
+        if db.userVersion < 15 {
+            // Managed databases: real provisioning against a shared MariaDB. Add
+            // the scoped user's password + a "managed" flag to the existing
+            // (bookkeeping-only) server_databases, and a one-row engine config
+            // holding the shared container's root password + published port.
+            try db.execute(
+                """
+                ALTER TABLE server_databases ADD COLUMN password TEXT;
+                ALTER TABLE server_databases ADD COLUMN managed INTEGER NOT NULL DEFAULT 0;
+                CREATE TABLE IF NOT EXISTS db_engine (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    root_password TEXT NOT NULL,
+                    host_port INTEGER NOT NULL,
+                    image TEXT NOT NULL
+                );
+                """)
+            db.userVersion = 15
+        }
+        if db.userVersion < 16 {
             // Host-level metrics, for the status page. Separate table from
             // `metrics` rather than a synthetic container row: the columns are
             // different (there is no cpu limit or pid count for a machine), and
@@ -342,8 +584,15 @@ public enum PanelSchema {
                 );
                 CREATE INDEX IF NOT EXISTS idx_host_metrics_time ON host_metrics(measured_at);
                 """)
-            db.userVersion = 8
+            db.userVersion = 16
         }
+    }
+
+    /// Current time as the ISO8601 string the schedule/audit columns use.
+    static func nowISO() -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.string(from: Date())
     }
 }
 
@@ -367,7 +616,9 @@ public struct AuditEntry: Sendable, Equatable, Identifiable {
 
 /// Typed access to panel state (users, grants, sessions, audit) over Database.
 public final class PanelDataStore: Sendable {
-    private let db: Database
+    // Internal (not private) so the provisioning CRUD extension in its own file
+    // can reach the same serialized connection.
+    let db: Database
 
     public init(databasePath: String) throws {
         self.db = try Database(path: databasePath)
@@ -430,18 +681,20 @@ public final class PanelDataStore: Sendable {
             try db.run(
                 """
                 INSERT INTO grants
-                    (user_id, container_name, perm_view, perm_power, perm_files, perm_console, perm_schedules, perm_lifecycle)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (user_id, container_name, perm_view, perm_power, perm_files, perm_console, perm_schedules, perm_lifecycle, perm_backups)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id, container_name) DO UPDATE SET
                     perm_view=excluded.perm_view, perm_power=excluded.perm_power,
                     perm_files=excluded.perm_files, perm_console=excluded.perm_console,
-                    perm_schedules=excluded.perm_schedules, perm_lifecycle=excluded.perm_lifecycle
+                    perm_schedules=excluded.perm_schedules, perm_lifecycle=excluded.perm_lifecycle,
+                    perm_backups=excluded.perm_backups
                 """,
                 [
                     .integer(userID), .text(containerName),
                     .integer(grant.view ? 1 : 0), .integer(grant.power ? 1 : 0),
                     .integer(grant.files ? 1 : 0), .integer(grant.console ? 1 : 0),
                     .integer(grant.schedules ? 1 : 0), .integer(grant.lifecycle ? 1 : 0),
+                    .integer(grant.backups ? 1 : 0),
                 ]
             )
         }
@@ -457,7 +710,8 @@ public final class PanelDataStore: Sendable {
                 files: (row["perm_files"]?.asInt ?? 0) != 0,
                 console: (row["perm_console"]?.asInt ?? 0) != 0,
                 schedules: (row["perm_schedules"]?.asInt ?? 0) != 0,
-                lifecycle: (row["perm_lifecycle"]?.asInt ?? 0) != 0
+                lifecycle: (row["perm_lifecycle"]?.asInt ?? 0) != 0,
+                backups: (row["perm_backups"]?.asInt ?? 0) != 0
             )
         }
         return result
@@ -466,6 +720,29 @@ public final class PanelDataStore: Sendable {
     /// Builds the per-request authorization engine for a user.
     public func authorizationEngine(for user: PanelUser) throws -> AuthorizationEngine {
         AuthorizationEngine(isAdmin: user.isAdmin, grants: user.isAdmin ? [:] : (try grants(forUserID: user.id)))
+    }
+
+    /// Every user who holds a grant on one container, with that grant. Used to
+    /// enumerate a server's sub-users (owner-managed access delegation).
+    public func grantsForContainer(named containerName: String) throws -> [(userID: Int64, grant: ContainerGrant)] {
+        var result: [(userID: Int64, grant: ContainerGrant)] = []
+        for row in try db.query("SELECT * FROM grants WHERE container_name = ?", [.text(containerName)]) {
+            guard let userID = row["user_id"]?.asInt else { continue }
+            result.append(
+                (
+                    userID: userID,
+                    grant: ContainerGrant(
+                        view: (row["perm_view"]?.asInt ?? 0) != 0,
+                        power: (row["perm_power"]?.asInt ?? 0) != 0,
+                        files: (row["perm_files"]?.asInt ?? 0) != 0,
+                        console: (row["perm_console"]?.asInt ?? 0) != 0,
+                        schedules: (row["perm_schedules"]?.asInt ?? 0) != 0,
+                        lifecycle: (row["perm_lifecycle"]?.asInt ?? 0) != 0,
+                        backups: (row["perm_backups"]?.asInt ?? 0) != 0
+                    )
+                ))
+        }
+        return result
     }
 
     // MARK: Sessions (tokens are stored hashed; the raw token lives only in the cookie)
@@ -595,6 +872,26 @@ public final class PanelDataStore: Sendable {
                 detail.map(SQLValue.text) ?? .null,
             ]
         )
+    }
+
+    /// Audit entries for one container, newest first — the source of a server's
+    /// client-visible activity log. Filters on the recorded container name.
+    public func listAudit(containerName: String, limit: Int = 200) throws -> [AuditEntry] {
+        try db.query(
+            "SELECT * FROM audit WHERE container_name = ? ORDER BY id DESC LIMIT ?",
+            [.text(containerName), .integer(Int64(limit))]
+        ).map { row in
+            AuditEntry(
+                id: row["id"]?.asInt ?? 0,
+                timestamp: row["ts"]?.asString ?? "",
+                username: row["username"]?.asString ?? "",
+                action: row["action"]?.asString ?? "",
+                containerName: row["container_name"]?.asString,
+                outcome: row["outcome"]?.asString ?? "",
+                sourceIP: row["source_ip"]?.asString,
+                detail: row["detail"]?.asString
+            )
+        }
     }
 
     public func listAudit(limit: Int = 500) throws -> [AuditEntry] {

@@ -166,6 +166,41 @@ h2.section { font-size:12px; letter-spacing:.6px; text-transform:uppercase; colo
 .primary { background:var(--btn-start); color:var(--btn-fg); border:0; border-radius:11px; padding:13px; font-weight:600; width:100%; min-height:46px; margin-top:8px; }
 .danger { background:none; color:var(--red); border:1px solid var(--red); border-radius:11px; padding:12px; font-weight:600; width:100%; min-height:46px; margin-top:8px; }
 .note { font-size:13px; color:var(--muted); margin-top:8px; }
+.subedit { border:1px solid var(--line); border-radius:12px; padding:14px; margin-top:4px; }
+.subedit h3 { font-size:15px; margin:0 0 6px; }
+.subedit .field input { flex:1; min-width:180px; }
+.perms { display:flex; flex-direction:column; gap:2px; margin:6px 0; }
+.permrow { display:flex; align-items:center; gap:9px; padding:9px 4px; font-size:15px; border-bottom:1px solid var(--line); }
+.permrow:last-child { border-bottom:0; }
+.permrow input[type=checkbox] { width:20px; height:20px; accent-color:var(--accent); }
+.permrow input:disabled + span { color:var(--muted); }
+.alist { display:flex; flex-direction:column; margin-top:6px; }
+.arow { display:flex; gap:11px; align-items:flex-start; padding:11px 4px; border-bottom:1px solid var(--line); }
+.arow:last-child { border-bottom:0; }
+.arow .aic { flex:0 0 auto; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13px; }
+.arow .aic.ok { background:color-mix(in srgb, var(--accent) 18%, transparent); color:var(--accent); }
+.arow .aic.bad { background:color-mix(in srgb, var(--red) 18%, transparent); color:var(--red); }
+.arow .abody { min-width:0; }
+.arow .abody > div:first-child { font-size:14px; word-break:break-word; }
+.crashbar { display:flex; gap:12px; align-items:center; margin:12px 0; padding:12px 14px; border-radius:12px;
+  background:color-mix(in srgb, var(--red) 12%, transparent); border:1px solid color-mix(in srgb, var(--red) 45%, transparent); }
+.crashbar.oom { background:color-mix(in srgb, var(--amber) 14%, transparent); border-color:color-mix(in srgb, var(--amber) 50%, transparent); }
+.crashbar .ci { flex:0 0 auto; width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+  font-size:15px; background:var(--red); color:var(--bg); }
+.crashbar.oom .ci { background:var(--amber); }
+.crashbar .ct { font-size:14px; font-weight:600; }
+.crashbar .cs { font-size:12px; color:var(--muted); margin-top:2px; }
+.titlerow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.spill { font-size:12px; font-weight:600; padding:3px 10px; border-radius:999px; letter-spacing:.02em; }
+.spill.online { background:color-mix(in srgb, var(--accent) 18%, transparent); color:var(--accent); }
+.spill.starting { background:color-mix(in srgb, var(--amber) 20%, transparent); color:var(--amber); }
+.taskrow { display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+.taskrow:last-of-type { border-bottom:0; }
+.taskrow .seq { color:var(--muted); font-size:13px; min-width:20px; }
+.taskrow select, .taskrow input[type=text] { padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--tile); color:var(--fg); font-size:14px; min-height:38px; }
+.taskrow input[type=text] { flex:1; min-width:140px; }
+.taskrow input[type=number] { width:64px; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--tile); color:var(--fg); font-size:14px; min-height:38px; }
+.taskrow .wait { font-size:12px; color:var(--muted); display:flex; align-items:center; gap:4px; }
 .fail { color:var(--red); } .okrun { color:var(--muted); } .timeout { color:var(--amber); }
 h2 { font-size:15px; color:var(--fg2); font-weight:600; margin:18px 2px 8px; }
 

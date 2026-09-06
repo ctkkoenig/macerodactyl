@@ -15,6 +15,75 @@ public enum ContainerRunState: String, Sendable, Hashable {
     }
 }
 
+/// The last-exit detail behind a stopped container — why it is not running.
+/// Sourced from `docker inspect` (`.State` + `.RestartCount`), which is the only
+/// place `OOMKilled` and the exact exit code live (the `docker ps` status string
+/// carries the code but can't tell an OOM kill from any other 137).
+public struct ContainerExitInfo: Sendable, Equatable {
+    public let exitCode: Int
+    public let oomKilled: Bool
+    public let error: String
+    public let restartCount: Int
+    /// ISO8601 finish time, or nil when the container has never run (docker uses
+    /// the zero time "0001-01-01T00:00:00Z" for that).
+    public let finishedAt: String?
+
+    public init(exitCode: Int, oomKilled: Bool, error: String, restartCount: Int, finishedAt: String?) {
+        self.exitCode = exitCode
+        self.oomKilled = oomKilled
+        self.error = error
+        self.restartCount = restartCount
+        self.finishedAt = finishedAt
+    }
+
+    /// Exit codes that mean "stopped by a signal", the normal shutdown paths —
+    /// SIGINT (Ctrl-C), SIGKILL (docker stop's force after grace), SIGTERM. These
+    /// are how a user-initiated stop usually ends, so on their own they are NOT a
+    /// crash; only an OOM kill or an engine error alongside them is.
+    private static let gracefulStopCodes: Set<Int> = [130, 137, 143]
+
+    /// Whether the container did NOT stop cleanly. An OOM kill or a recorded
+    /// engine error always counts; a non-zero exit counts unless it is one of the
+    /// ordinary stop-signal codes (so pressing Stop never looks like a crash).
+    public var crashed: Bool {
+        if oomKilled || !error.isEmpty { return true }
+        return exitCode != 0 && !Self.gracefulStopCodes.contains(exitCode)
+    }
+
+    /// A short, human reason for the stop, or nil when it stopped cleanly / was a
+    /// normal signalled shutdown.
+    public var reason: String? {
+        if oomKilled { return "Out of memory (OOM-killed)" }
+        if !error.isEmpty { return "Error: \(error)" }
+        if crashed { return "Crashed (exit code \(exitCode))" }
+        return nil
+    }
+
+    /// Parses the output of
+    /// `docker inspect --format '{{.RestartCount}}\t{{json .State}}'`:
+    /// a restart count, a tab, then the JSON of `.State`. Returns nil on any
+    /// shape it doesn't recognize (so a docker/version quirk degrades to "no
+    /// info" rather than a wrong reason).
+    public static func parse(inspectOutput: String) -> ContainerExitInfo? {
+        let trimmed = inspectOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let tab = trimmed.firstIndex(of: "\t") else { return nil }
+        let restartCount = Int(trimmed[trimmed.startIndex..<tab].trimmingCharacters(in: .whitespaces)) ?? 0
+        let jsonText = String(trimmed[trimmed.index(after: tab)...])
+        guard let data = jsonText.data(using: .utf8),
+            let state = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        let exitCode = (state["ExitCode"] as? Int) ?? Int(state["ExitCode"] as? Double ?? 0)
+        let oomKilled = (state["OOMKilled"] as? Bool) ?? false
+        let error = (state["Error"] as? String) ?? ""
+        var finishedAt = (state["FinishedAt"] as? String) ?? ""
+        // docker's zero time means "never finished / never ran".
+        if finishedAt.hasPrefix("0001-01-01") { finishedAt = "" }
+        return ContainerExitInfo(
+            exitCode: exitCode, oomKilled: oomKilled, error: error, restartCount: restartCount,
+            finishedAt: finishedAt.isEmpty ? nil : finishedAt)
+    }
+}
+
 public struct DockerContainer: Identifiable, Hashable, Sendable {
     public let id: String
     public let name: String

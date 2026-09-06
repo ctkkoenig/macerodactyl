@@ -27,6 +27,103 @@ import Testing
         return h
     }
 
+    // MARK: Crash / OOM surfacing (T8.1)
+
+    @Test func stoppedContainerDetailSurfacesOOMKill() async throws {
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        // Make "bot" a stopped container that was OOM-killed.
+        harness.service.fixtures["bot"] = .init(
+            container: .fixture(name: "bot", workingDir: harness.botStackRoot.path, running: false),
+            stackRoot: harness.botStackRoot)
+        harness.service.cannedExitInfo["bot"] = ContainerExitInfo(
+            exitCode: 137, oomKilled: true, error: "", restartCount: 2, finishedAt: "2026-09-03T04:00:00Z")
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            try await client.execute(uri: "/api/containers/bot", method: .get, headers: headers(token)) { response in
+                #expect(response.status == .ok)
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                let exit = json["exit"] as! [String: Any]
+                #expect(exit["crashed"] as? Bool == true)
+                #expect(exit["oomKilled"] as? Bool == true)
+                #expect(exit["reason"] as? String == "Out of memory (OOM-killed)")
+                #expect(exit["restartCount"] as? Int == 2)
+            }
+        }
+    }
+
+    @Test func runningContainerHasNoExitInfo() async throws {
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        // "bot" is running by default; even if exit info is set, it isn't inspected.
+        harness.service.cannedExitInfo["bot"] = ContainerExitInfo(
+            exitCode: 1, oomKilled: false, error: "", restartCount: 0, finishedAt: nil)
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            try await client.execute(uri: "/api/containers/bot", method: .get, headers: headers(token)) { response in
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                #expect(json["exit"] == nil || json["exit"] is NSNull)
+            }
+        }
+    }
+
+    // MARK: Startup done-detection (T8.3)
+
+    /// Links the running "bot" fixture to an egg that declares a `Done (` marker.
+    private func provisionBotWithDoneMarker(_ h: PanelServerTests.Harness) throws {
+        let raw = #"""
+            {"meta":{"version":"PTDL_v2"},"name":"MC","author":"a","description":"d",
+             "docker_images":{"J":"img"},"startup":"run {{SERVER_JARFILE}}",
+             "config":{"files":"{}","startup":"{\"done\":\"Done (\"}","logs":"{}","stop":"stop"},
+             "scripts":{"installation":{"script":"echo","container":"debian","entrypoint":"bash"}},
+             "variables":[{"name":"J","env_variable":"SERVER_JARFILE","default_value":"s.jar",
+               "user_viewable":true,"user_editable":true,"rules":"required"}]}
+            """#
+        let nestID = try h.store.createNest(name: "MC", author: nil, description: nil)
+        let eggID = try h.store.importEgg(try EggParser.parse(raw), rawJSON: raw, nestID: nestID)
+        try h.store.createServerRecord(
+            uuid: UUID().uuidString, name: "bot", eggID: eggID, dockerImage: "img", ownerUserID: nil,
+            limits: .init(memoryMiB: 256), startup: "run", values: [:], status: "active")
+    }
+
+    @Test func startupStateIsOnlineWhenTheDoneMarkerIsInTheLog() async throws {
+        let h = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        try provisionBotWithDoneMarker(h)
+        h.service.cannedLogHistory["bot"] = "Loading…\nDone (4.2s)! For help, type help"
+        h.service.cannedStartedAt["bot"] = Date()  // just started
+        try await h.app.test(.router) { client in
+            let token = try await loginToken(client, h)
+            try await client.execute(uri: "/api/containers/bot", method: .get, headers: headers(token)) { response in
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                #expect(json["startupState"] as? String == "online")
+            }
+        }
+    }
+
+    @Test func startupStateIsStartingBeforeTheMarkerAppears() async throws {
+        let h = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        try provisionBotWithDoneMarker(h)
+        h.service.cannedLogHistory["bot"] = "Loading libraries…\nPreparing world…"  // no marker yet
+        h.service.cannedStartedAt["bot"] = Date()  // fresh → not past the grace window
+        try await h.app.test(.router) { client in
+            let token = try await loginToken(client, h)
+            try await client.execute(uri: "/api/containers/bot", method: .get, headers: headers(token)) { response in
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                #expect(json["startupState"] as? String == "starting")
+            }
+        }
+    }
+
+    @Test func noStartupStateForAContainerWithoutADoneMarker() async throws {
+        // "bot" here has no server record/egg, so there is no startup phase to show.
+        let h = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        try await h.app.test(.router) { client in
+            let token = try await loginToken(client, h)
+            try await client.execute(uri: "/api/containers/bot", method: .get, headers: headers(token)) { response in
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                #expect(json["startupState"] == nil || json["startupState"] is NSNull)
+            }
+        }
+    }
+
     // MARK: Per-permission gating
 
     @Test func powerRequiresPowerPermission() async throws {
@@ -76,6 +173,57 @@ import Testing
         }
     }
 
+    @Test func consoleInputRequiresConsolePermissionAndSendsLine() async throws {
+        // Without console → 403.
+        let noConsole = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        try await noConsole.app.test(.router) { client in
+            let token = try await loginToken(client, noConsole)
+            try await client.execute(
+                uri: "/api/containers/bot/console/input", method: .post,
+                headers: headers(token, csrf: true, json: true), body: ByteBuffer(string: #"{"line":"stop"}"#)
+            ) { #expect($0.status == .forbidden) }
+        }
+        // With console → the line reaches the service's stdin channel.
+        let granted = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, console: true))
+        try await granted.app.test(.router) { client in
+            let token = try await loginToken(client, granted)
+            try await client.execute(
+                uri: "/api/containers/bot/console/input", method: .post,
+                headers: headers(token, csrf: true, json: true), body: ByteBuffer(string: #"{"line":"say hi"}"#)
+            ) { #expect($0.status == .ok) }
+            #expect(granted.service.consoleInput.contains { $0.name == "bot" && $0.line == "say hi" })
+        }
+    }
+
+    @Test func backupsRequirePermissionCreateAndList() async throws {
+        // Without backups → 403.
+        let denied = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
+        try await denied.app.test(.router) { client in
+            let token = try await loginToken(client, denied)
+            try await client.execute(
+                uri: "/api/containers/bot/backups", method: .post, headers: headers(token, csrf: true, json: true),
+                body: ByteBuffer(string: "{}")
+            ) { #expect($0.status == .forbidden) }
+        }
+        // With backups → create records a row and it lists.
+        let granted = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, backups: true))
+        try await granted.app.test(.router) { client in
+            let token = try await loginToken(client, granted)
+            let uuid: String = try await client.execute(
+                uri: "/api/containers/bot/backups", method: .post, headers: headers(token, csrf: true, json: true),
+                body: ByteBuffer(string: #"{"name":"pre-update"}"#)
+            ) { response in
+                #expect(response.status == .ok)
+                return (try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any])["uuid"] as! String
+            }
+            #expect(granted.service.backupCalls.contains { $0.op == "create" })
+            try await client.execute(uri: "/api/containers/bot/backups", method: .get, headers: headers(token)) { response in
+                let arr = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [[String: Any]]
+                #expect(arr.contains { $0["uuid"] as? String == uuid && $0["name"] as? String == "pre-update" })
+            }
+        }
+    }
+
     @Test func schedulesRequireSchedulesPermission() async throws {
         // view but NOT schedules → 403 on both read and write.
         let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true))
@@ -115,6 +263,43 @@ import Testing
         }
         #expect(harness.service.scheduleCalls.contains { $0.op == "set" && $0.name == "bot" })
         #expect(harness.service.scheduleCalls.contains { $0.op == "remove" && $0.name == "bot" })
+    }
+
+    @Test func scheduleTaskChainRoundTripsAndValidates() async throws {
+        let harness = try await base.makeHarness(scopedGrant: ContainerGrant(view: true, schedules: true))
+        try await harness.app.test(.router) { client in
+            let token = try await loginToken(client, harness)
+            // Set a schedule with a 3-task chain.
+            let body = #"""
+                {"hour":4,"minute":0,"weekdays":[],"tasks":[
+                  {"action":"command","payload":"say restarting","offsetSeconds":0},
+                  {"action":"backup","payload":"","offsetSeconds":60},
+                  {"action":"power","payload":"restart","offsetSeconds":5}]}
+                """#
+            try await client.execute(
+                uri: "/api/containers/bot/schedule", method: .post,
+                headers: headers(token, csrf: true, json: true), body: ByteBuffer(string: body)
+            ) { #expect($0.status == .ok) }
+            // GET returns the chain in order.
+            try await client.execute(uri: "/api/containers/bot/schedule", method: .get, headers: headers(token)) { response in
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: response.body)) as! [String: Any]
+                let sched = json["schedule"] as! [String: Any]
+                let tasks = sched["tasks"] as! [[String: Any]]
+                #expect(tasks.map { $0["action"] as! String } == ["command", "backup", "power"])
+                #expect(tasks[1]["offsetSeconds"] as? Int == 60)
+            }
+            // Persisted in the store too.
+            #expect(try harness.store.scheduleTasks(containerName: "bot").count == 3)
+
+            // An invalid task (bad power payload) is rejected AND doesn't clobber
+            // the existing chain.
+            try await client.execute(
+                uri: "/api/containers/bot/schedule", method: .post,
+                headers: headers(token, csrf: true, json: true),
+                body: ByteBuffer(string: #"{"hour":4,"minute":0,"weekdays":[],"tasks":[{"action":"power","payload":"explode"}]}"#)
+            ) { #expect($0.status == .badRequest) }
+            #expect(try harness.store.scheduleTasks(containerName: "bot").count == 3)  // unchanged
+        }
     }
 
     @Test func filesRequireFilesPermission() async throws {

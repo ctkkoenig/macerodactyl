@@ -47,8 +47,17 @@ public struct PanelSettingsView: View {
                     .textSelection(.enabled)
             }
             if model.enabled {
-                Button("Copy local URL") { model.copyLocalURL() }
-                    .controlSize(.small)
+                HStack {
+                    Button("Copy local URL") { model.copyLocalURL() }
+                        .controlSize(.small)
+                    Button("Manage servers in browser…") { model.openAdmin() }
+                        .controlSize(.small)
+                }
+                Text(
+                    "Creating servers from eggs, and managing nests, users, allocations, and panel settings, is done in the browser admin panel."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             HStack {
@@ -209,6 +218,7 @@ struct GrantRow: View {
                 permToggle("Console", grant.console) { model.setPermission(user, container, .console, $0) }
                 permToggle("Schedules", grant.schedules) { model.setPermission(user, container, .schedules, $0) }
                 permToggle("Lifecycle", grant.lifecycle) { model.setPermission(user, container, .lifecycle, $0) }
+                permToggle("Backups", grant.backups) { model.setPermission(user, container, .backups, $0) }
             }
             if !container.filesGrantable {
                 Text("No stack folder — file access unavailable").font(.caption2).foregroundStyle(.tertiary)

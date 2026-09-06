@@ -42,6 +42,39 @@ import Testing
 
     // MARK: Availability gate
 
+    @Test func compressAndDecompressRoundTrips() async throws {
+        let fx = try makeFixture()
+        defer { fx.cleanup() }
+        // Archive the config folder, delete it, extract into a new dir.
+        try await fx.service.compress(["config"], to: "snapshot.tar.gz")
+        #expect(FileManager.default.fileExists(atPath: fx.stackDir.appending(path: "snapshot.tar.gz").path))
+        try fx.service.delete("config")
+        try await fx.service.decompress("snapshot.tar.gz", into: "restored")
+        let restored = try fx.service.read("restored/config/nginx.conf")
+        #expect(restored.text.contains("server"))
+    }
+
+    @Test func compressRefusesTraversalSource() async throws {
+        let fx = try makeFixture()
+        defer { fx.cleanup() }
+        await #expect(throws: (any Error).self) {
+            try await fx.service.compress(["../../etc/passwd"], to: "grab.tar.gz")
+        }
+    }
+
+    @Test func pullRejectsNonHTTPAndTraversalBeforeAnyDownload() async throws {
+        let fx = try makeFixture()
+        defer { fx.cleanup() }
+        // Non-http scheme is refused (never touches the network).
+        await #expect(throws: FileServiceError.invalidPath) {
+            try await fx.service.pull(from: "file:///etc/passwd", to: "grabbed.txt")
+        }
+        // A traversal destination is refused by confinement.
+        await #expect(throws: (any Error).self) {
+            try await fx.service.pull(from: "https://example.com/x", to: "../escape.txt")
+        }
+    }
+
     @Test func unmanagedContainerGetsNoService() {
         let bare = DockerContainer(
             id: "b", name: "fixture-bare", image: "alpine", state: .running, status: "Up",
